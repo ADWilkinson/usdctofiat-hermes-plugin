@@ -1,0 +1,22 @@
+name: usdctofiat
+version: 1.0.0
+description: USDCtoFiat by Galleon Labs — cash out Base USDC to fiat. mode fast|best required. No keys.
+author: ADWilkinson
+manifest_version: 2
+api_version: 1
+license: MIT
+homepage: https://github.com/ADWilkinson/usdctofiat-hermes-plugin
+tags:
+  - usdctofiat
+  - offramp
+  - usdc
+  - base
+  - galleon
+python_dependencies:
+  - "usdctofiat>=0.1.0"
+provides_tools:
+  - usdctofiat_cashout
+  - usdctofiat_estimate
+  - usdctofiat_watch
+  - usdctofiat_withdraw
+  - usdctofiat_deposits

@@ -1,0 +1,26 @@
+[project]
+name = "usdctofiat-hermes-plugin"
+version = "1.0.0"
+description = "Hermes plugin for USDCtoFiat by Galleon Labs. Wraps usdctofiat.cashout. mode fast|best required. No keys."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ADWilkinson" }]
+keywords = ["usdctofiat", "hermes", "offramp", "usdc", "base", "galleon"]
+dependencies = ["usdctofiat>=0.1.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://usdctofiat.xyz"
+Documentation = "https://usdctofiat.xyz/developers"
+Repository = "https://github.com/ADWilkinson/usdctofiat-hermes-plugin"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
