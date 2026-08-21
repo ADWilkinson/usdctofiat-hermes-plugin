@@ -21,6 +21,15 @@ Repository = "https://github.com/ADWilkinson/usdctofiat-hermes-plugin"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["usdctofiat_hermes_plugin"]
+
+[tool.setuptools.package-dir]
+usdctofiat_hermes_plugin = "."
+
+[tool.setuptools.package-data]
+usdctofiat_hermes_plugin = ["plugin.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
