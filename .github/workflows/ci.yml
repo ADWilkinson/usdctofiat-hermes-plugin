@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Build wheel
+        run: |
+          rm -rf dist
+          python -m pip wheel . --no-deps --wheel-dir dist
+
+      - name: Installed-wheel smoke
+        env:
+          SMOKE_PYTHON: ${{ runner.temp }}/smoke/bin/python
+        run: |
+          python -m venv "${{ runner.temp }}/smoke"
+          "$SMOKE_PYTHON" -m pip install --upgrade pip
+          "$SMOKE_PYTHON" -m pip install --no-deps dist/usdctofiat_hermes_plugin-*.whl
+          "$SMOKE_PYTHON" - <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
+          from unittest.mock import MagicMock
+
+          os.chdir(tempfile.mkdtemp())
+
+          import usdctofiat_hermes_plugin
+          from usdctofiat_hermes_plugin import register
+
+          pkg_dir = Path(usdctofiat_hermes_plugin.__file__).resolve().parent
+          assert "site-packages" in str(pkg_dir), pkg_dir
+          manifest = pkg_dir / "plugin.yaml"
+          assert manifest.is_file(), manifest
+          text = manifest.read_text(encoding="utf-8")
+          assert "name: usdctofiat" in text
+          assert "manifest_version: 2" in text
+
+          ctx = MagicMock()
+          register(ctx)
+          names = [call.kwargs["name"] for call in ctx.register_tool.call_args_list]
+          assert names == [
+              "usdctofiat_cashout",
+              "usdctofiat_estimate",
+              "usdctofiat_watch",
+              "usdctofiat_withdraw",
+              "usdctofiat_deposits",
+          ]
+          print("wheel-smoke: ok")
+          PY
+
+  ci:
+    name: CI
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every matrix leg
+        run: test "${{ needs.test.result }}" = "success"
