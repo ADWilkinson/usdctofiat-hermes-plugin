@@ -288,3 +288,7 @@ def test_handlers_accept_kwargs_and_return_json_string():
     )
     assert isinstance(payload, str)
     json.loads(payload)
+
+
+def test_ci_red_probe():
+    assert False, "scratch branch: prove CI fails on a broken assertion"
