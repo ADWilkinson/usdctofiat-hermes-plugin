@@ -32,6 +32,11 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Tests
+        env:
+          # Make the pinned Hermes installer-ceiling read a hard requirement in
+          # CI; offline runs skip it, CI must not.
+          HERMES_COMPAT_REQUIRE_UPSTREAM: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m pytest -q
 
       - name: Build wheel
@@ -63,7 +68,8 @@ jobs:
           assert manifest.is_file(), manifest
           text = manifest.read_text(encoding="utf-8")
           assert "name: usdctofiat" in text
-          assert "manifest_version: 2" in text
+          assert "manifest_version: 1" in text
+          assert "usdctofiat>=0.1.0" in text
 
           ctx = MagicMock()
           register(ctx)
