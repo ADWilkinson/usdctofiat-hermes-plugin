@@ -2,7 +2,11 @@ name: usdctofiat
 version: 1.0.0
 description: USDCtoFiat by Galleon Labs — cash out Base USDC to fiat. mode fast|best required. No keys.
 author: ADWilkinson
-manifest_version: 2
+# Hermes' Git plugin installer (hermes_cli/plugins_cmd.py) rejects any manifest
+# declaring a version above 1, while its runtime parser understands v2 additively
+# and reads the v2 fields below regardless of this number. Declaring 1 keeps the
+# documented `hermes plugins install` working; see tests/test_install_compat.py.
+manifest_version: 1
 api_version: 1
 license: MIT
 homepage: https://github.com/ADWilkinson/usdctofiat-hermes-plugin

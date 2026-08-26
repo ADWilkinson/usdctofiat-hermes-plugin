@@ -95,12 +95,18 @@ def patched(mock_offramp):
         yield create, cashout, mock_offramp
 
 
-def test_manifest_declares_v2_and_python_dep():
+def test_manifest_keeps_v2_metadata_and_python_dep():
+    """Hermes parses the v2 metadata fields regardless of the declared version.
+
+    The declared version itself is owned by tests/test_install_compat.py, which
+    checks it against the real installer ceiling.
+    """
     from pathlib import Path
 
     text = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text()
     assert "name: usdctofiat" in text
-    assert "manifest_version: 2" in text
+    assert "api_version: 1" in text
+    assert "python_dependencies:" in text
     assert "usdctofiat>=0.1.0" in text
     assert "requires_env" not in text
     assert "usdctofiat_cashout" in text

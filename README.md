@@ -65,7 +65,7 @@ Native Hermes directory plugin (`plugin.yaml` + `register(ctx)`):
 
 ```text
 .
-├── plugin.yaml      # manifest v2
+├── plugin.yaml      # manifest (installer-compatible v1 + v2 metadata)
 ├── __init__.py      # register()
 ├── schemas.py       # what the LLM sees
 ├── tools.py         # wraps usdctofiat.cashout
