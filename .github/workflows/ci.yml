@@ -31,12 +31,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      # The pinned-upstream reads are Python-version independent, so they run
-      # once in the `upstream` job rather than four times here. Doing them per
-      # leg puts four jobs on the GitHub API at the same instant and trips its
-      # secondary rate limit -- observed as three of four legs 429ing on a run
-      # whose fourth leg passed. Without the env var they skip; everything
-      # else in the suite still runs on every supported Python.
+      # Offline and deterministic: the Hermes shapes the guards check against
+      # are committed in tests/hermes_pinned.py, not fetched. See
+      # .github/workflows/hermes-pin.yml for what keeps that file honest.
       - name: Tests
         run: python -m pytest -q
 
@@ -85,46 +82,11 @@ jobs:
           print("wheel-smoke: ok")
           PY
 
-  upstream:
-    name: pinned upstream contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dev extras
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-
-      # The one place the guards read real Hermes source. Required here, so an
-      # unreachable upstream is a failure rather than a silent skip.
-      - name: Guards against the pinned Hermes revision
-        env:
-          HERMES_COMPAT_REQUIRE_UPSTREAM: "1"
-          # Read-only, and only spent on api.github.com contents reads of the
-          # pinned public Hermes revision. Unauthenticated reads share the
-          # runner's IP quota and 429.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python -m pytest -q \
-            tests/test_install_compat.py \
-            tests/test_host_contract.py
-
   ci:
     name: CI
     if: always()
-    needs: [test, upstream]
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Require every matrix leg
         run: test "${{ needs.test.result }}" = "success"
-
-      - name: Require the pinned upstream guards
-        run: test "${{ needs.upstream.result }}" = "success"

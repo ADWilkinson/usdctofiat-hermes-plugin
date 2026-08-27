@@ -69,7 +69,8 @@ Native Hermes directory plugin (`plugin.yaml` + `register(ctx)`):
 ├── __init__.py      # register()
 ├── schemas.py       # what the LLM sees
 ├── tools.py         # wraps usdctofiat.cashout
-└── tests/           # mocked tool tests + installer/vendor/host contract guards
+├── tests/           # mocked tool tests + installer/vendor/host contract guards
+└── scripts/         # regenerate the pinned Hermes snapshot the guards read
 ```
 
 ## Tests

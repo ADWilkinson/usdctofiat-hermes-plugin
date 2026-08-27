@@ -9,14 +9,14 @@ return type, so the plugin could stop loading in a real session with the whole
 suite green. That is the same shape as the two failures this repo already
 shipped: a package that would not build, and a documented install that exited 1.
 
-These tests read the real ``PluginContext.register_tool`` and
-``ToolRegistry.dispatch`` from the pinned Hermes revision and bind the plugin's
-actual calls against them, so host drift is loud rather than silent.
+These tests bind the plugin's actual calls against the real
+``PluginContext.register_tool`` and ``ToolRegistry.dispatch`` shapes, captured
+from the pinned Hermes revision in tests/hermes_pinned.py, so host drift is loud
+rather than silent.
 """
 
 from __future__ import annotations
 
-import ast
 import importlib.util
 import inspect
 import json
@@ -27,12 +27,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.hermes_upstream import HERMES_REV, find_function, read_source
+from tests.hermes_pinned import (
+    DISPATCH_HANDLER_CALL,
+    HERMES_REV,
+    REGISTER_TOOL_PARAMETERS,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-
-PLUGINS_PATH = "hermes_cli/plugins.py"
-REGISTRY_PATH = "tools/registry.py"
 
 # The namespace Hermes imports directory plugins under
 # (``PluginManager._load_directory_module``). Suffixed here so a test import can
@@ -58,44 +59,24 @@ INCOMPLETE_ARGS = {
 }
 
 
-def upstream_signature(class_name, func_name, path):
-    """Rebuild an ``inspect.Signature`` for an upstream method from its source.
+def register_tool_signature():
+    """Rebuild ``PluginContext.register_tool``'s signature from the snapshot.
 
-    Parameter names and whether each one has a default are all that decide
-    whether a call binds. Annotations and default *values* are deliberately
-    dropped: reconstructing them would couple this guard to upstream's typing
-    style and make a harmless annotation edit fail the build.
+    Names, kinds and whether-defaulted are all that decide whether a call binds.
+    Annotations and default *values* are deliberately not captured: pinning them
+    would couple this guard to upstream's typing style and fail on a harmless
+    annotation edit.
     """
-    func = find_function(read_source(path), class_name, func_name, path)
-    spec = func.args
-    positional = spec.posonlyargs + spec.args
-    # ast attaches defaults to the tail of the positional list.
-    first_defaulted = len(positional) - len(spec.defaults)
-
-    parameters = []
-    for index, arg in enumerate(positional):
-        if arg.arg == "self":
-            continue
-        kind = (
-            inspect.Parameter.POSITIONAL_ONLY
-            if index < len(spec.posonlyargs)
-            else inspect.Parameter.POSITIONAL_OR_KEYWORD
-        )
-        default = None if index >= first_defaulted else inspect.Parameter.empty
-        parameters.append(inspect.Parameter(arg.arg, kind, default=default))
-    if spec.vararg is not None:
-        parameters.append(inspect.Parameter(spec.vararg, inspect.Parameter.VAR_POSITIONAL))
-    for arg, default in zip(spec.kwonlyargs, spec.kw_defaults):
-        parameters.append(
+    return inspect.Signature(
+        [
             inspect.Parameter(
-                arg.arg,
-                inspect.Parameter.KEYWORD_ONLY,
-                default=inspect.Parameter.empty if default is None else None,
+                parameter["name"],
+                getattr(inspect.Parameter, parameter["kind"]),
+                default=None if parameter["has_default"] else inspect.Parameter.empty,
             )
-        )
-    if spec.kwarg is not None:
-        parameters.append(inspect.Parameter(spec.kwarg, inspect.Parameter.VAR_KEYWORD))
-    return inspect.Signature(parameters)
+            for parameter in REGISTER_TOOL_PARAMETERS
+        ]
+    )
 
 
 def load_plugin_as_hermes_does():
@@ -161,7 +142,7 @@ def plugin_module():
 @pytest.fixture
 def registered(plugin_module):
     """Drive ``register()`` through the pinned ``PluginContext.register_tool``."""
-    ctx = RecordingContext(upstream_signature("PluginContext", "register_tool", PLUGINS_PATH))
+    ctx = RecordingContext(register_tool_signature())
     plugin_module.register(ctx)
     return ctx.calls
 
@@ -195,7 +176,7 @@ def test_host_signature_would_reject_an_unknown_keyword():
     hard ``TypeError`` in a real session rather than an ignored extra. If that
     ever changes, the bind above stops proving anything and this fails first.
     """
-    signature = upstream_signature("PluginContext", "register_tool", PLUGINS_PATH)
+    signature = register_tool_signature()
     assert not any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
@@ -211,27 +192,18 @@ def test_host_signature_would_reject_an_unknown_keyword():
 
 
 def test_handlers_accept_the_host_dispatch_call_shape(registered):
-    """Hermes calls ``entry.handler(args, **kwargs)``; read that shape upstream.
+    """Hermes calls ``entry.handler(args, **kwargs)``.
 
     ``handler(**args)`` instead of ``handler(args)`` would break all five tools
-    at runtime with the mocked suite still green, so the call shape is taken
-    from the real dispatcher rather than assumed.
+    at runtime with the mocked suite still green, so the call shape is one
+    captured from the real dispatcher rather than assumed.
     """
-    dispatch = find_function(read_source(REGISTRY_PATH), "ToolRegistry", "dispatch", REGISTRY_PATH)
-    handler_calls = [
-        node
-        for node in ast.walk(dispatch)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "handler"
-    ]
-    assert handler_calls, (
-        f"no handler call found in ToolRegistry.dispatch at {HERMES_REV[:7]}; "
-        "the dispatch seam moved -- re-verify the handler signature before repinning."
+    assert DISPATCH_HANDLER_CALL["positional"] == 1, "host stopped passing args positionally"
+    assert DISPATCH_HANDLER_CALL["forwards_kwargs"], "host stopped forwarding **kwargs"
+    assert not DISPATCH_HANDLER_CALL["keywords"], (
+        f"host now passes named arguments {DISPATCH_HANDLER_CALL['keywords']} at "
+        f"{HERMES_REV[:7]}; the handlers accept them via **kwargs, but check that is intended."
     )
-    for call in handler_calls:
-        assert len(call.args) == 1, "host stopped passing args positionally"
-        assert [keyword.arg for keyword in call.keywords] == [None], "host stopped forwarding **kwargs"
 
     for entry in registered:
         signature = inspect.signature(entry["handler"])
@@ -273,5 +245,7 @@ def test_manifest_provides_tools_matches_what_register_registers(registered):
     cannot dispatch.
     """
     manifest = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
-    declared = re.findall(r"^  - (usdctofiat_\S+)", manifest, re.MULTILINE)
+    block = re.search(r"^provides_tools:\n((?:  - \S+\n)+)", manifest, re.MULTILINE)
+    assert block is not None, "plugin.yaml declares no provides_tools"
+    declared = re.findall(r"  - (\S+)", block.group(1))
     assert declared == [entry["name"] for entry in registered]

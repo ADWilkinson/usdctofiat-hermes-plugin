@@ -1,0 +1,40 @@
+name: hermes pin
+
+# Re-derives tests/hermes_pinned.py from the Hermes revision it names and fails
+# if the committed file is not faithful -- a hand-edit, or a bumped SHA that was
+# never regenerated.
+#
+# Deliberately not a pull-request check. This is the only thing here that reads
+# GitHub for source it does not own, and GitHub's anti-scraping protection
+# answers those reads with 429 often enough that gating merges on it turns an
+# unrelated throttle into a red required check. The revision is pinned by SHA,
+# so the answer is a constant; checking it weekly is enough.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: snapshot matches the pinned revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Re-derive and compare
+        env:
+          # Read-only, and only spent on contents reads of the pinned public
+          # Hermes revision.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/refresh_hermes_pin.py --check
