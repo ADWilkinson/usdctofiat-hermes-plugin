@@ -36,11 +36,14 @@ _CACHE: dict[str, str] = {}
 _FAILURES: dict[str, Exception] = {}
 
 
-# Every read is a required check in CI, so one transient blip -- a 5xx, or a
-# secondary rate limit tripped by four matrix legs starting together -- must
-# not turn a green plugin red. Bounded: four attempts, then the real error.
+# Every read is a required check in CI, so one transient blip must not turn a
+# green plugin red. GitHub answers a secondary rate limit with 429 and often a
+# Retry-After measured in tens of seconds, so honour that header when it is
+# there and fall back to a widening wait when it is not. Bounded: four
+# attempts and a capped wait, then the real error.
 _ATTEMPTS = 4
-_BACKOFF_SECONDS = 1
+_BACKOFF_SECONDS = (5, 15, 45)
+_MAX_WAIT_SECONDS = 90
 
 
 def _get(path):
@@ -57,14 +60,33 @@ def _get(path):
         return response.read().decode("utf-8")
 
 
+def _retry_after(exc, attempt):
+    """Seconds to wait before the next attempt, capped."""
+    header = getattr(exc, "headers", None)
+    raw = header.get("Retry-After") if header is not None else None
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        requested = _BACKOFF_SECONDS[attempt - 1]
+    return max(1, min(requested, _MAX_WAIT_SECONDS))
+
+
+def _required():
+    return os.environ.get(REQUIRE_UPSTREAM_ENV) == "1"
+
+
 def _fetch(path):
-    for attempt in range(1, _ATTEMPTS + 1):
+    # Only spend the retry budget where the read is a required check. A local
+    # or offline run skips instead, so it should find that out in one attempt
+    # rather than sitting through a minute of backoff per file.
+    attempts = _ATTEMPTS if _required() else 1
+    for attempt in range(1, attempts + 1):
         try:
             return _get(path)
-        except (urllib.error.URLError, TimeoutError, OSError):
-            if attempt == _ATTEMPTS:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt == attempts:
                 raise
-            time.sleep(_BACKOFF_SECONDS * 2 ** (attempt - 1))
+            time.sleep(_retry_after(exc, attempt))
 
 
 def read_source(path):
@@ -89,7 +111,7 @@ def read_source(path):
 
 
 def _unreachable(path, exc):
-    if os.environ.get(REQUIRE_UPSTREAM_ENV) == "1":
+    if _required():
         pytest.fail(f"could not read {HERMES_REPO}@{HERMES_REV[:7]}:{path}: {exc}")
     pytest.skip(f"upstream {path} unreachable: {exc}")
 
