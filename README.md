@@ -80,7 +80,7 @@ pip install "usdctofiat>=0.1.0" pytest
 pytest
 ```
 
-Tool behaviour is tested against a mocked client. Three guards check the real contracts instead: the installed `usdctofiat` call surface, the Hermes installer's manifest ceiling, and the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`). The last two read pinned upstream Hermes source over the network — they skip when offline, and CI requires them. Nothing sends a transaction or reads a key.
+Tool behaviour is tested against a mocked client. Three guards check the real contracts instead: the installed `usdctofiat` call surface, the Hermes installer's manifest ceiling, and the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`). The Hermes shapes are captured from a pinned revision into `tests/hermes_pinned.py`, so the whole suite runs offline; `scripts/refresh_hermes_pin.py` regenerates that file when the pin moves, and a weekly workflow re-derives it to prove it is still faithful. Nothing sends a transaction or reads a key.
 
 ## Source and support
 
