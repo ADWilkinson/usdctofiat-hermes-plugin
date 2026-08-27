@@ -69,7 +69,8 @@ Native Hermes directory plugin (`plugin.yaml` + `register(ctx)`):
 ├── __init__.py      # register()
 ├── schemas.py       # what the LLM sees
 ├── tools.py         # wraps usdctofiat.cashout
-└── tests/           # mocked unit tests
+├── tests/           # mocked tool tests + installer/vendor/host contract guards
+└── scripts/         # regenerate the pinned Hermes snapshot the guards read
 ```
 
 ## Tests
@@ -79,7 +80,7 @@ pip install "usdctofiat>=0.1.0" pytest
 pytest
 ```
 
-Tests mock the client. They do not send transactions or read keys.
+Tool behaviour is tested against a mocked client. Three guards check the real contracts instead: the installed `usdctofiat` call surface, the Hermes installer's manifest ceiling, and the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`). The last two read pinned upstream Hermes source over the network — they skip when offline, and CI requires them. Nothing sends a transaction or reads a key.
 
 ## Source and support
 

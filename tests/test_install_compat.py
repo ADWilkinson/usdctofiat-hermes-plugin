@@ -9,32 +9,20 @@ therefore loads fine in-process while the documented owner/repo install exits 1
 without installing anything -- which is exactly how this plugin shipped broken
 while every mocked check stayed green.
 
-These tests read the ceiling from the real upstream installer at a pinned
-revision, so an upstream change is loud rather than silent.
+These tests check the manifest against the ceiling the real installer enforces,
+captured from the pinned revision in tests/hermes_pinned.py.
 """
 
 from __future__ import annotations
 
-import os
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-import pytest
-
-HERMES_REPO = "NousResearch/hermes-agent"
-
-# Hermes Agent v0.20.5 (2026.8.19). The documented install and
-# `hermes plugins doctor usdctofiat --ci` were both verified green against this
-# exact revision in an isolated HERMES_HOME on 2026-08-26. Bump deliberately:
-# re-run that isolated install + Doctor readback before changing this SHA or
-# the ceiling below.
-HERMES_REV = "057dcdf236f8a6a26721c10fcc6ccb72726e272a"
-INSTALLER_PATH = "hermes_cli/plugins_cmd.py"
-
-# Mirrors `_SUPPORTED_MANIFEST_VERSION` in the installer at HERMES_REV.
-SUPPORTED_INSTALLER_MANIFEST_VERSION = 1
+from tests.hermes_pinned import (
+    HERMES_REPO,
+    HERMES_REV,
+    INSTALLER_MANIFEST_VERSION_CEILING as SUPPORTED_INSTALLER_MANIFEST_VERSION,
+)
 
 # The manifest version this plugin shipped with while the install was broken.
 # Kept as the regression fixture so the guard is proven to bite.
@@ -56,16 +44,6 @@ def declared_manifest_version(text):
     return None if match is None else match.group(1)
 
 
-def _fetch_upstream_installer():
-    url = f"https://api.github.com/repos/{HERMES_REPO}/contents/{INSTALLER_PATH}?ref={HERMES_REV}"
-    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github.raw"})
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if token:
-        request.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return response.read().decode("utf-8")
-
-
 def test_manifest_version_is_installable():
     declared = declared_manifest_version((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
     assert installer_accepts(declared), (
@@ -83,31 +61,15 @@ def test_guard_rejects_the_manifest_that_broke_the_install():
     )
 
 
-def test_pinned_installer_ceiling_still_matches_upstream():
-    """Read the real ceiling from the pinned installer source.
+def test_guard_reads_a_real_installer_ceiling():
+    """The snapshot is derived from upstream, so sanity-check what it yielded.
 
-    Required in CI (`HERMES_COMPAT_REQUIRE_UPSTREAM=1`); skipped offline so the
-    rest of the suite still runs without network.
+    scripts/refresh_hermes_pin.py fails loudly if `_SUPPORTED_MANIFEST_VERSION`
+    is missing, and the scheduled hermes-pin workflow re-derives this file and
+    fails if it drifted. This only catches a hand-edit that made the ceiling
+    meaningless.
     """
-    required = os.environ.get("HERMES_COMPAT_REQUIRE_UPSTREAM") == "1"
-    try:
-        source = _fetch_upstream_installer()
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        if required:
-            pytest.fail(f"could not read {HERMES_REPO}@{HERMES_REV[:7]}:{INSTALLER_PATH}: {exc}")
-        pytest.skip(f"upstream installer unreachable: {exc}")
-
-    match = re.search(r"^_SUPPORTED_MANIFEST_VERSION\s*=\s*(\d+)", source, re.MULTILINE)
-    assert match is not None, (
-        f"_SUPPORTED_MANIFEST_VERSION not found in {INSTALLER_PATH} at {HERMES_REV[:7]}; "
-        "the installer gate moved -- re-verify the isolated install before repinning."
-    )
-
-    upstream_ceiling = int(match.group(1))
-    assert upstream_ceiling == SUPPORTED_INSTALLER_MANIFEST_VERSION, (
-        f"pinned installer ceiling changed to {upstream_ceiling}; update "
-        "SUPPORTED_INSTALLER_MANIFEST_VERSION after re-verifying the isolated install."
-    )
-
-    declared = declared_manifest_version((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
-    assert installer_accepts(declared, upstream_ceiling)
+    assert isinstance(SUPPORTED_INSTALLER_MANIFEST_VERSION, int)
+    assert SUPPORTED_INSTALLER_MANIFEST_VERSION >= 1
+    assert re.fullmatch(r"[0-9a-f]{40}", HERMES_REV), HERMES_REV
+    assert HERMES_REPO == "NousResearch/hermes-agent"

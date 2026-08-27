@@ -31,12 +31,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      # Offline and deterministic: the Hermes shapes the guards check against
+      # are committed in tests/hermes_pinned.py, not fetched. See
+      # .github/workflows/hermes-pin.yml for what keeps that file honest.
       - name: Tests
-        env:
-          # Make the pinned Hermes installer-ceiling read a hard requirement in
-          # CI; offline runs skip it, CI must not.
-          HERMES_COMPAT_REQUIRE_UPSTREAM: "1"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m pytest -q
 
       - name: Build wheel
