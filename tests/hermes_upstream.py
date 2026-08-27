@@ -36,19 +36,24 @@ _CACHE: dict[str, str] = {}
 _FAILURES: dict[str, Exception] = {}
 
 
-# Every read is a required check in CI, so one transient blip must not turn a
-# green plugin red. Bounded: three attempts, then the real error.
-_ATTEMPTS = 3
+# Every read is a required check in CI, so one transient blip -- a 5xx, or a
+# secondary rate limit tripped by four matrix legs starting together -- must
+# not turn a green plugin red. Bounded: four attempts, then the real error.
+_ATTEMPTS = 4
 _BACKOFF_SECONDS = 1
 
 
 def _get(path):
-    # raw.githubusercontent, not the API contents endpoint: hermes-agent is
-    # public and the revision is pinned, so this needs no credential, and a
-    # cacheable CDN read is not subject to the API's secondary rate limit --
-    # which four matrix legs reading three files each will otherwise trip.
-    url = f"https://raw.githubusercontent.com/{HERMES_REPO}/{HERMES_REV}/{path}"
-    with urllib.request.urlopen(url, timeout=60) as response:
+    # The authenticated API contents endpoint, not raw.githubusercontent: raw
+    # rate-limits unauthenticated reads per source IP, and GitHub-hosted
+    # runners share theirs -- three of four matrix legs took a 429 from it in
+    # one run while the fourth passed. A token buys 5000/hour instead.
+    url = f"https://api.github.com/repos/{HERMES_REPO}/contents/{path}?ref={HERMES_REV}"
+    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github.raw"})
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(request, timeout=60) as response:
         return response.read().decode("utf-8")
 
 
@@ -59,7 +64,7 @@ def _fetch(path):
         except (urllib.error.URLError, TimeoutError, OSError):
             if attempt == _ATTEMPTS:
                 raise
-            time.sleep(_BACKOFF_SECONDS * attempt)
+            time.sleep(_BACKOFF_SECONDS * 2 ** (attempt - 1))
 
 
 def read_source(path):

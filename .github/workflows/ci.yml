@@ -36,6 +36,10 @@ jobs:
           # Make the pinned-upstream Hermes reads a hard requirement in CI;
           # offline runs skip them, CI must not.
           HERMES_COMPAT_REQUIRE_UPSTREAM: "1"
+          # Read-only, and only spent on api.github.com contents reads of the
+          # pinned public Hermes revision. Unauthenticated reads share the
+          # runner's IP quota and 429.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m pytest -q
 
       - name: Build wheel
