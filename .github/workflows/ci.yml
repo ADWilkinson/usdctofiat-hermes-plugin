@@ -33,10 +33,9 @@ jobs:
 
       - name: Tests
         env:
-          # Make the pinned Hermes installer-ceiling read a hard requirement in
-          # CI; offline runs skip it, CI must not.
+          # Make the pinned-upstream Hermes reads a hard requirement in CI;
+          # offline runs skip them, CI must not.
           HERMES_COMPAT_REQUIRE_UPSTREAM: "1"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m pytest -q
 
       - name: Build wheel
