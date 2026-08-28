@@ -28,6 +28,8 @@ Hermes surfaces `python_dependencies` (`usdctofiat>=0.1.0`) but does not auto-in
 pip install "usdctofiat>=0.1.0"
 ```
 
+Skip that step and the plugin still installs, loads and registers all five tools. The first call then returns `CLIENT_NOT_INSTALLED` and repeats the command above, because Hermes' own install hint and load-time warning go to the console and the log rather than to the conversation.
+
 No API key. No `requires_env`. No private-key prompt.
 
 ## Tools

@@ -17,16 +17,47 @@ _BANNED_KEY_KWARGS = (
 )
 
 
-def _create_offramp(**kwargs: Any) -> Any:
-    from usdctofiat import create_offramp
+class ClientNotInstalled(Exception):
+    """The vendor client is absent, so say which command installs it.
 
-    return create_offramp(**kwargs)
+    ``python_dependencies`` is a declaration seam: Hermes prints the requirement
+    at install time and logs a warning at load, then registers all five tools
+    anyway. An environment that ran the documented install without the manual
+    ``pip install`` therefore reaches a handler, and a bare
+    ``ModuleNotFoundError: No module named 'usdctofiat'`` is all the model gets
+    back -- from a chat turn that never saw either host message.
+    """
+
+    code = "CLIENT_NOT_INSTALLED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The usdctofiat client is not installed in the Python environment "
+            "Hermes runs in. Hermes surfaces a plugin's python_dependencies but "
+            "never installs them. Run: pip install 'usdctofiat>=0.1.0'"
+        )
+
+
+def _import_client() -> Any:
+    """Import ``usdctofiat``, or name the install command instead."""
+    try:
+        import usdctofiat
+    except ModuleNotFoundError as exc:
+        # Only an absent client. A missing module *inside* usdctofiat, or a
+        # missing dependency of it, is a broken install with a different fix and
+        # must keep its own error.
+        if exc.name == "usdctofiat":
+            raise ClientNotInstalled() from exc
+        raise
+    return usdctofiat
+
+
+def _create_offramp(**kwargs: Any) -> Any:
+    return _import_client().create_offramp(**kwargs)
 
 
 def _cashout(**kwargs: Any) -> Any:
-    from usdctofiat import cashout
-
-    return cashout(**kwargs)
+    return _import_client().cashout(**kwargs)
 
 
 def _reject_keys(payload: dict[str, Any]) -> None:
