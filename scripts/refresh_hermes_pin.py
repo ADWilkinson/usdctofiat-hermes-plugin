@@ -2,7 +2,8 @@
 """Regenerate tests/hermes_pinned.py from real Hermes source.
 
 The guards in tests/ check this plugin against the shapes Hermes actually has:
-the installer's manifest-version ceiling, ``PluginContext.register_tool``'s
+the installer's manifest-version ceiling, the security scan the installer runs
+before it copies anything into place, ``PluginContext.register_tool``'s
 parameter list, and the way ``ToolRegistry.dispatch`` calls a handler. Reading
 those over the network at test time made a required check depend on GitHub
 answering, and GitHub's anti-scraping protection answers repeated content reads
@@ -44,6 +45,8 @@ HERMES_REPO = "NousResearch/hermes-agent"
 INSTALLER_PATH = "hermes_cli/plugins_cmd.py"
 PLUGINS_PATH = "hermes_cli/plugins.py"
 REGISTRY_PATH = "tools/registry.py"
+PLUGIN_GUARD_PATH = "tools/plugin_guard.py"
+SKILLS_GUARD_PATH = "tools/skills_guard.py"
 
 _ATTEMPTS = 5
 _BACKOFF_SECONDS = (5, 15, 45, 90)
@@ -139,6 +142,130 @@ def handler_call_shape(dispatch, rev):
     }
 
 
+def find_module_function(source, func_name, path, rev):
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            return node
+    raise SystemExit(f"{func_name} not found in {path} at {rev[:7]}")
+
+
+_ARITHMETIC = {ast.Add: lambda a, b: a + b, ast.Mult: lambda a, b: a * b}
+
+
+def const_value(node):
+    """`ast.literal_eval`, plus the arithmetic upstream writes limits with.
+
+    ``MAX_PLUGIN_TOTAL_SIZE_KB = 10 * 1024`` is a ``BinOp``, which
+    ``literal_eval`` refuses. Fold numeric operands here rather than evaluating
+    upstream source.
+    """
+    if isinstance(node, ast.BinOp) and type(node.op) in _ARITHMETIC:
+        left, right = const_value(node.left), const_value(node.right)
+        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            return _ARITHMETIC[type(node.op)](left, right)
+        raise ValueError(f"non-numeric operand in {ast.dump(node)}")
+    return ast.literal_eval(node)
+
+
+def module_constant(source, name, path, rev):
+    """Read a module-level constant assignment by name."""
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            try:
+                return const_value(node.value)
+            except (ValueError, TypeError) as exc:
+                raise SystemExit(f"{name} in {path} at {rev[:7]} is not a constant: {exc}") from None
+    raise SystemExit(
+        f"{name} not found in {path} at {rev[:7]}; the install-time scanner moved -- "
+        "re-verify the isolated install before repinning."
+    )
+
+
+def verdict_by_severity(source, rev):
+    """`_determine_verdict`: which finding severity forces which verdict.
+
+    Yields `{"critical": "dangerous", "high": "caution"}` upstream. Severities
+    absent from this mapping (medium, low) are informational and still scan
+    `safe`, which is why the guard keys on the mapping rather than on a
+    hard-coded severity name.
+    """
+    func = find_module_function(source, "_determine_verdict", SKILLS_GUARD_PATH, rev)
+
+    # `has_critical = any(f.severity == "critical" for f in findings)`
+    severity_of = {}
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        for compare in ast.walk(node.value):
+            if (
+                isinstance(compare, ast.Compare)
+                and isinstance(compare.left, ast.Attribute)
+                and compare.left.attr == "severity"
+                and len(compare.comparators) == 1
+                and isinstance(compare.comparators[0], ast.Constant)
+            ):
+                severity_of[target.id] = compare.comparators[0].value
+
+    # `if has_critical: return "dangerous"`
+    rule = {}
+    for node in func.body:
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id in severity_of
+            and len(node.body) == 1
+            and isinstance(node.body[0], ast.Return)
+            and isinstance(node.body[0].value, ast.Constant)
+        ):
+            rule[severity_of[node.test.id]] = node.body[0].value.value
+    if not rule:
+        raise SystemExit(
+            f"_determine_verdict at {rev[:7]} no longer maps severities to verdicts the "
+            "way this script reads it; re-verify the isolated install before repinning."
+        )
+    return rule
+
+
+def unattended_install_verdict(source, rev):
+    """`should_allow_plugin_install`: the only verdict that installs unprompted.
+
+    `caution` returns `True` only under `force`, and `dangerous` never does, so
+    a plugin that wants the documented one-line install to work must scan
+    exactly this verdict.
+    """
+    func = find_module_function(source, "should_allow_plugin_install", PLUGIN_GUARD_PATH, rev)
+    for node in func.body:
+        if not (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Attribute)
+            and node.test.left.attr == "verdict"
+            and len(node.test.comparators) == 1
+            and isinstance(node.test.comparators[0], ast.Constant)
+        ):
+            continue
+        # Direct body only: `caution` reaches its `return True` through a
+        # nested `if force:`, which is not an unattended install.
+        for statement in node.body:
+            if (
+                isinstance(statement, ast.Return)
+                and isinstance(statement.value, ast.Tuple)
+                and statement.value.elts
+                and isinstance(statement.value.elts[0], ast.Constant)
+                and statement.value.elts[0].value is True
+            ):
+                return node.test.comparators[0].value
+    raise SystemExit(
+        f"should_allow_plugin_install at {rev[:7]} no longer returns an unconditional "
+        "allow for any verdict; re-verify the isolated install before repinning."
+    )
+
+
 def installer_ceiling(source, rev):
     match = re.search(r"^_SUPPORTED_MANIFEST_VERSION\s*=\s*(\d+)", source, re.MULTILINE)
     if match is None:
@@ -149,12 +276,20 @@ def installer_ceiling(source, rev):
     return int(match.group(1))
 
 
-def render(rev, ceiling, register_tool, dispatch_shape):
+def render(rev, ceiling, register_tool, dispatch_shape, scan):
     parameters = "\n".join(
         '    {{"name": "{name}", "kind": "{kind}", "has_default": {has_default}}},'.format(**p)
         for p in register_tool
     )
     keywords = ", ".join(f'"{name}"' for name in dispatch_shape["keywords"])
+    binary_extensions = ", ".join(f'"{ext}"' for ext in sorted(scan["binary_extensions"]))
+    excluded_dirs = ", ".join(f'"{name}"' for name in sorted(scan["excluded_dirs"]))
+    severity_remap = "\n".join(
+        f'    "{pattern}": "{severity}",' for pattern, severity in sorted(scan["severity_remap"].items())
+    )
+    verdicts = "\n".join(
+        f'    "{severity}": "{verdict}",' for severity, verdict in sorted(scan["verdict_by_severity"].items())
+    )
     return f'''"""What Hermes actually looks like at the pinned revision.
 
 GENERATED -- do not edit by hand. Run scripts/refresh_hermes_pin.py.
@@ -197,6 +332,41 @@ DISPATCH_HANDLER_CALL = {{
     "forwards_kwargs": {dispatch_shape["forwards_kwargs"]!r},
     "keywords": [{keywords}],
 }}
+
+# `tools/plugin_guard.py` -- the security scan `_install_plugin_core` runs on the
+# fresh clone *before* it copies anything into place. Its verdict decides whether
+# the documented one-line install proceeds, needs a confirmation the docs never
+# mention, or is refused outright.
+PLUGIN_SCANNER_VERSION = "{scan["scanner_version"]}"
+
+# The only verdict `should_allow_plugin_install` lets through unprompted.
+UNATTENDED_INSTALL_VERDICT = "{scan["unattended_verdict"]}"
+
+# `_determine_verdict`: a finding at one of these severities forces the verdict
+# beside it. Severities absent here (medium, low) are informational.
+SCAN_VERDICT_BY_SEVERITY = {{
+{verdicts}
+}}
+
+# `plugin_guard.SEVERITY_REMAP`: severities the plugin scanner overrides on the
+# structural findings it raises, relaxing the skills-guard defaults.
+SCAN_SEVERITY_REMAP = {{
+{severity_remap}
+}}
+
+# `skills_guard.SUSPICIOUS_BINARY_EXTENSIONS`: shipping one of these raises
+# `binary_file`, which SCAN_SEVERITY_REMAP puts at `high` for plugins.
+SCAN_BINARY_EXTENSIONS = [{binary_extensions}]
+
+# `plugin_guard.EXCLUDED_DIRS`: never walked, so nothing under them can trip a
+# finding.
+SCAN_EXCLUDED_DIRS = [{excluded_dirs}]
+
+# `plugin_guard` structural limits. Exceeding one raises a medium finding, which
+# does not block on its own but is the tree growing past what the host expects.
+SCAN_MAX_FILE_COUNT = {scan["max_file_count"]}
+SCAN_MAX_SINGLE_FILE_KB = {scan["max_single_file_kb"]}
+SCAN_MAX_TOTAL_SIZE_KB = {scan["max_total_size_kb"]}
 '''
 
 
@@ -224,6 +394,34 @@ def main():
     installer = fetch(INSTALLER_PATH, rev)
     plugins = fetch(PLUGINS_PATH, rev)
     registry = fetch(REGISTRY_PATH, rev)
+    plugin_guard = fetch(PLUGIN_GUARD_PATH, rev)
+    skills_guard = fetch(SKILLS_GUARD_PATH, rev)
+
+    scan = {
+        "scanner_version": module_constant(
+            plugin_guard, "PLUGIN_SCANNER_VERSION", PLUGIN_GUARD_PATH, rev
+        ),
+        "unattended_verdict": unattended_install_verdict(plugin_guard, rev),
+        "verdict_by_severity": verdict_by_severity(skills_guard, rev),
+        "severity_remap": module_constant(
+            plugin_guard, "SEVERITY_REMAP", PLUGIN_GUARD_PATH, rev
+        ),
+        "binary_extensions": module_constant(
+            skills_guard, "SUSPICIOUS_BINARY_EXTENSIONS", SKILLS_GUARD_PATH, rev
+        ),
+        "excluded_dirs": module_constant(
+            plugin_guard, "EXCLUDED_DIRS", PLUGIN_GUARD_PATH, rev
+        ),
+        "max_file_count": module_constant(
+            plugin_guard, "MAX_PLUGIN_FILE_COUNT", PLUGIN_GUARD_PATH, rev
+        ),
+        "max_single_file_kb": module_constant(
+            plugin_guard, "MAX_PLUGIN_SINGLE_FILE_KB", PLUGIN_GUARD_PATH, rev
+        ),
+        "max_total_size_kb": module_constant(
+            plugin_guard, "MAX_PLUGIN_TOTAL_SIZE_KB", PLUGIN_GUARD_PATH, rev
+        ),
+    }
 
     rendered = render(
         rev,
@@ -232,6 +430,7 @@ def main():
         handler_call_shape(
             find_function(registry, "ToolRegistry", "dispatch", REGISTRY_PATH, rev), rev
         ),
+        scan,
     )
 
     if args.check:

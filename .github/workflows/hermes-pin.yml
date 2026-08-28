@@ -2,7 +2,10 @@ name: hermes pin
 
 # Re-derives tests/hermes_pinned.py from the Hermes revision it names and fails
 # if the committed file is not faithful -- a hand-edit, or a bumped SHA that was
-# never regenerated.
+# never regenerated. Then runs Hermes' real install-time security scanner over
+# the tracked tree, because a `caution` verdict there refuses the one-line
+# install the README documents and the offline guard only re-implements the
+# scanner's structural half.
 #
 # Deliberately not a pull-request check. This is the only thing here that reads
 # GitHub for source it does not own, and GitHub's anti-scraping protection
@@ -20,7 +23,7 @@ permissions:
 
 jobs:
   check:
-    name: snapshot matches the pinned revision
+    name: snapshot and install scan match the pinned revision
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -38,3 +41,11 @@ jobs:
           # Hermes revision.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/refresh_hermes_pin.py --check
+
+      # Runs even when the snapshot drifted: the verdict on the tree we ship is
+      # worth knowing either way, and the two failures are independent.
+      - name: Would the documented install still be allowed
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/hermes_install_scan.py
