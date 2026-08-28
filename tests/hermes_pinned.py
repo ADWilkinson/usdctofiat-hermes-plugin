@@ -49,3 +49,41 @@ DISPATCH_HANDLER_CALL = {
     "forwards_kwargs": True,
     "keywords": [],
 }
+
+# `tools/plugin_guard.py` -- the security scan `_install_plugin_core` runs on the
+# fresh clone *before* it copies anything into place. Its verdict decides whether
+# the documented one-line install proceeds, needs a confirmation the docs never
+# mention, or is refused outright.
+PLUGIN_SCANNER_VERSION = "plugin-guard-v1"
+
+# The only verdict `should_allow_plugin_install` lets through unprompted.
+UNATTENDED_INSTALL_VERDICT = "safe"
+
+# `_determine_verdict`: a finding at one of these severities forces the verdict
+# beside it. Severities absent here (medium, low) are informational.
+SCAN_VERDICT_BY_SEVERITY = {
+    "critical": "dangerous",
+    "high": "caution",
+}
+
+# `plugin_guard.SEVERITY_REMAP`: severities the plugin scanner overrides on the
+# structural findings it raises, relaxing the skills-guard defaults.
+SCAN_SEVERITY_REMAP = {
+    "binary_file": "high",
+    "curl_pipe_shell": "high",
+    "hermes_env_access": "medium",
+}
+
+# `skills_guard.SUSPICIOUS_BINARY_EXTENSIONS`: shipping one of these raises
+# `binary_file`, which SCAN_SEVERITY_REMAP puts at `high` for plugins.
+SCAN_BINARY_EXTENSIONS = [".app", ".bin", ".com", ".dat", ".deb", ".dll", ".dmg", ".dylib", ".exe", ".msi", ".rpm", ".so"]
+
+# `plugin_guard.EXCLUDED_DIRS`: never walked, so nothing under them can trip a
+# finding.
+SCAN_EXCLUDED_DIRS = [".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".venv", "__pycache__", "node_modules", "venv"]
+
+# `plugin_guard` structural limits. Exceeding one raises a medium finding, which
+# does not block on its own but is the tree growing past what the host expects.
+SCAN_MAX_FILE_COUNT = 400
+SCAN_MAX_SINGLE_FILE_KB = 1024
+SCAN_MAX_TOTAL_SIZE_KB = 10240

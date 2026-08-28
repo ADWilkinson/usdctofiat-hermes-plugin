@@ -70,7 +70,7 @@ Native Hermes directory plugin (`plugin.yaml` + `register(ctx)`):
 ├── schemas.py       # what the LLM sees
 ├── tools.py         # wraps usdctofiat.cashout
 ├── tests/           # mocked tool tests + installer/vendor/host contract guards
-└── scripts/         # regenerate the pinned Hermes snapshot the guards read
+└── scripts/         # regenerate the pinned snapshot; run the real install scan
 ```
 
 ## Tests
@@ -80,7 +80,14 @@ pip install "usdctofiat>=0.1.0" pytest
 pytest
 ```
 
-Tool behaviour is tested against a mocked client. Three guards check the real contracts instead: the installed `usdctofiat` call surface, the Hermes installer's manifest ceiling, and the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`). The Hermes shapes are captured from a pinned revision into `tests/hermes_pinned.py`, so the whole suite runs offline; `scripts/refresh_hermes_pin.py` regenerates that file when the pin moves, and a weekly workflow re-derives it to prove it is still faithful. Nothing sends a transaction or reads a key.
+Tool behaviour is tested against a mocked client. Four guards check the real contracts instead:
+
+- the installed `usdctofiat` call surface;
+- the Hermes installer's manifest ceiling;
+- the security scan the installer runs on the clone before it installs, where a `caution` verdict refuses the documented one-line install rather than merely warning;
+- the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`).
+
+The Hermes shapes are captured from a pinned revision into `tests/hermes_pinned.py`, so the whole suite runs offline; `scripts/refresh_hermes_pin.py` regenerates that file when the pin moves, and a weekly workflow re-derives it to prove it is still faithful. The scan guard re-implements only the scanner's structural half offline, so the same weekly workflow runs `scripts/hermes_install_scan.py`, which executes the real scanner from the pinned revision over the tracked tree. Nothing sends a transaction or reads a key.
 
 ## Source and support
 
