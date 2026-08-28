@@ -294,3 +294,80 @@ def test_handlers_accept_kwargs_and_return_json_string():
     )
     assert isinstance(payload, str)
     json.loads(payload)
+
+
+class TestClientNotInstalled:
+    """The first-run state the documented install actually leaves behind.
+
+    Hermes never installs a plugin's ``python_dependencies``: the CLI prints
+    them once at install time and ``PluginManager`` logs a warning at load, then
+    loads the plugin and registers all five tools regardless. So the likeliest
+    first call after `hermes plugins install` is one made without the client
+    present, and whatever it returns is the only thing the model -- and through
+    it the user -- ever sees about the problem.
+    """
+
+    ALL_TOOLS = (
+        (usdctofiat_cashout, {"mode": "fast", "amount": "100", "currency": "EUR", "platform": "revolut", "payee": "alice"}),
+        (usdctofiat_estimate, {"mode": "fast", "amount": "100", "currency": "EUR"}),
+        (usdctofiat_watch, {"deposit_id": "42"}),
+        (usdctofiat_withdraw, {"deposit_id": "42"}),
+        (usdctofiat_deposits, {"owner": "0x1111111111111111111111111111111111111111"}),
+    )
+
+    @staticmethod
+    def _absent(monkeypatch):
+        """Make ``import usdctofiat`` fail the way an uninstalled client does.
+
+        ``None`` in ``sys.modules`` raises ``ModuleNotFoundError`` with ``name``
+        set to the blocked module, so this reproduces the real failure even in
+        CI, where the client is installed.
+        """
+        import sys
+
+        monkeypatch.setitem(sys.modules, "usdctofiat", None)
+
+    @pytest.mark.parametrize(
+        "handler,args", ALL_TOOLS, ids=[handler.__name__ for handler, _ in ALL_TOOLS]
+    )
+    def test_every_tool_names_the_install_command(self, handler, args, monkeypatch):
+        self._absent(monkeypatch)
+        payload = json.loads(handler(args))
+        assert payload["code"] == "CLIENT_NOT_INSTALLED"
+        assert "pip install 'usdctofiat>=0.1.0'" in payload["error"]
+
+    def test_the_bare_error_it_replaces_is_not_what_ships(self, monkeypatch):
+        """Regression fixture: the reply this repo used to return.
+
+        ``{"error": "No module named 'usdctofiat'", "code": "ModuleNotFoundError"}``
+        is a true statement with no remediation in it, and the host messages
+        that carry the remediation are a console line and a log entry the chat
+        turn never sees.
+        """
+        self._absent(monkeypatch)
+        payload = json.loads(usdctofiat_cashout(dict(self.ALL_TOOLS[0][1])))
+        assert payload["code"] != "ModuleNotFoundError"
+        assert "No module named" not in payload["error"]
+
+    def test_a_broken_client_keeps_its_own_error(self, monkeypatch):
+        """Only an *absent* client is relabelled.
+
+        A dependency missing from inside ``usdctofiat`` is a different fault
+        with a different fix; claiming the client is uninstalled would send the
+        user to a pip command that is already satisfied.
+        """
+        import sys
+
+        class BrokenClientFinder:
+            """Fail ``import usdctofiat`` the way a missing transitive dep does."""
+
+            def find_spec(self, name, path=None, target=None):
+                if name == "usdctofiat":
+                    raise ModuleNotFoundError("No module named 'httpx'", name="httpx")
+                return None
+
+        monkeypatch.delitem(sys.modules, "usdctofiat", raising=False)
+        monkeypatch.setattr(sys, "meta_path", [BrokenClientFinder(), *sys.meta_path])
+        payload = json.loads(usdctofiat_estimate({"mode": "fast", "amount": "1", "currency": "EUR"}))
+        assert payload["code"] == "ModuleNotFoundError"
+        assert "httpx" in payload["error"]
