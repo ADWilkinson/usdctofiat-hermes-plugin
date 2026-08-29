@@ -5,15 +5,36 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-_BANNED_KEY_KWARGS = (
-    "private_key",
-    "privateKey",
-    "key",
-    "secret",
+# Matched after _normalise_name, which folds case and drops separators, so one
+# entry here covers private_key, privateKey, PRIVATE_KEY and private-key alike.
+# An exact-string list could not: it refused "private_key" and let "PRIVATE_KEY"
+# -- the spelling the env var everyone copies from actually uses -- through.
+_BANNED_KEY_NAMES = frozenset(
+    {
+        "privatekey",
+        "evmprivatekey",
+        "signingkey",
+        "walletkey",
+        "keystore",
+        "key",
+        "secret",
+        "secretkey",
+        "mnemonic",
+        "seed",
+        "seedphrase",
+    }
+)
+
+# Substrings, for the qualified names a model invents around the same material:
+# wallet_private_key, userMnemonic, backup_seed_phrase. Only markers that cannot
+# mean anything else belong here -- a bare "key" would refuse ordinary words.
+_BANNED_KEY_MARKERS = (
+    "privatekey",
+    "secretkey",
+    "signingkey",
     "mnemonic",
-    "wallet_key",
-    "evm_private_key",
-    "EVM_PRIVATE_KEY",
+    "seedphrase",
+    "keystore",
 )
 
 
@@ -60,9 +81,24 @@ def _cashout(**kwargs: Any) -> Any:
     return _import_client().cashout(**kwargs)
 
 
+def _normalise_name(name: Any) -> str:
+    """Fold an argument name to letters and digits, lowercased."""
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
 def _reject_keys(payload: dict[str, Any]) -> None:
-    for banned in _BANNED_KEY_KWARGS:
-        if banned in payload:
+    """Refuse key material by argument name, however the caller spelled it.
+
+    Refusing is the only signal the conversation gets. An unmatched name is not
+    forwarded -- no handler reads one -- but it is dropped in silence, so the
+    turn that pasted a key reads as an ordinary success and nobody learns to
+    rotate it.
+    """
+    for name in payload:
+        normalised = _normalise_name(name)
+        if normalised in _BANNED_KEY_NAMES or any(
+            marker in normalised for marker in _BANNED_KEY_MARKERS
+        ):
             raise TypeError(
                 "usdctofiat-hermes-plugin does not accept a private key. "
                 "Inject a host signer callback or call cashout without a signer "

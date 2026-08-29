@@ -265,6 +265,104 @@ def test_cashout_rejects_string_signer(patched):
     assert "does not accept a private key" in payload["error"]
 
 
+class TestKeyNameVariants:
+    """One pasted key, spelled the way the caller happened to spell it.
+
+    The refusal is the only place this plugin's no-keys promise is visible from
+    a chat turn. An unmatched name never reaches the vendor -- no handler reads
+    anything outside the schema -- but it is dropped in silence, so the call
+    comes back as an ordinary prepare and the pasted key looks accepted and
+    safe. Matching exact strings made that the default for ``PRIVATE_KEY``,
+    which is how the env var everyone copies from is actually spelled, and which
+    the old list already anticipated one line down as ``EVM_PRIVATE_KEY``.
+    """
+
+    SPELLINGS = (
+        "private_key",
+        "privateKey",
+        "PRIVATE_KEY",
+        "Private-Key",
+        "privatekey",
+        "EVM_PRIVATE_KEY",
+        "wallet_private_key",
+        "mnemonic",
+        "MNEMONIC",
+        "userMnemonic",
+        "seed_phrase",
+        "secretKey",
+        "keystore",
+        "signing_key",
+    )
+
+    @staticmethod
+    def _args(**extra):
+        return {
+            "mode": "fast",
+            "amount": "100",
+            "currency": "EUR",
+            "platform": "revolut",
+            "payee": "alice",
+            **extra,
+        }
+
+    @pytest.mark.parametrize("name", SPELLINGS)
+    def test_every_spelling_is_refused_before_the_vendor_is_called(self, name, patched):
+        _create, cashout, offramp = patched
+        payload = json.loads(usdctofiat_cashout(self._args(**{name: "0x" + "ab" * 32})))
+        assert "does not accept a private key" in payload["error"]
+        cashout.assert_not_called()
+        offramp.prepare.assert_not_called()
+
+    @pytest.mark.parametrize("name", SPELLINGS)
+    def test_a_host_kwarg_is_refused_too(self, name, patched):
+        """``_reject_keys`` guards both sides; kwargs is where a host would pass one."""
+        _create, cashout, offramp = patched
+        payload = json.loads(
+            usdctofiat_cashout(self._args(), **{name: "0x" + "ab" * 32})
+        )
+        assert "does not accept a private key" in payload["error"]
+        cashout.assert_not_called()
+        offramp.prepare.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "handler,args",
+        (
+            (usdctofiat_estimate, {"mode": "fast", "amount": "100", "currency": "EUR"}),
+            (usdctofiat_watch, {"deposit_id": "42"}),
+            (usdctofiat_withdraw, {"deposit_id": "42"}),
+            (usdctofiat_deposits, {"owner": "0x1111111111111111111111111111111111111111"}),
+        ),
+        ids=["estimate", "watch", "withdraw", "deposits"],
+    )
+    def test_the_other_tools_refuse_it_as_well(self, handler, args, patched):
+        payload = json.loads(handler({**args, "PRIVATE_KEY": "0x" + "ab" * 32}))
+        assert "does not accept a private key" in payload["error"]
+
+    def test_the_schema_arguments_are_not_caught(self, patched):
+        """Substring matching must not refuse the fields the tools are for.
+
+        Every name in schemas.py, plus the host ``signer`` callback, which is the
+        supported way to sign and must survive the guard that refuses key strings.
+        """
+        _create, _cashout, offramp = patched
+        payload = json.loads(usdctofiat_cashout(self._args()))
+        assert payload["signed"] is False
+        offramp.prepare.assert_called_once()
+
+        for handler, args in (
+            (usdctofiat_estimate, {"mode": "fast", "amount": "100", "currency": "EUR"}),
+            (usdctofiat_watch, {"deposit_id": "42"}),
+            (usdctofiat_withdraw, {"deposit_id": "42"}),
+            (usdctofiat_deposits, {"owner": "0x1111111111111111111111111111111111111111"}),
+        ):
+            assert "does not accept a private key" not in handler(args)
+
+        signed = json.loads(
+            usdctofiat_cashout(self._args(), signer=lambda tx: {"hash": "0x" + "cd" * 32})
+        )
+        assert signed["signed"] is True
+
+
 def test_estimate_watch_withdraw_deposits(patched):
     _create, _cashout, offramp = patched
     estimate = json.loads(usdctofiat_estimate({"mode": "fast", "amount": "100", "currency": "EUR"}))
