@@ -376,8 +376,54 @@ def test_estimate_watch_withdraw_deposits(patched):
     assert rows["deposits"][0]["id"] == "42"
 
     withdrawn = json.loads(usdctofiat_withdraw({"deposit_id": "42"}))
-    assert withdrawn["to"].lower().endswith("ef")
-    assert withdrawn["data"] == "0xwithdraw"
+    assert withdrawn["prepared"]["to"].lower().endswith("ef")
+    assert withdrawn["prepared"]["data"] == "0xwithdraw"
+
+
+class TestWithdrawSaysWhetherItWasSent:
+    """An unsigned withdraw must not read like a completed one.
+
+    Without a host signer -- the default, since the plugin never takes a key --
+    the vendor hands back an ``UnsignedTx``, whose ``as_dict`` is a bare
+    ``{to, data, value, chainId}``. Returned unwrapped, that is a confident
+    success with nothing in it to say the transaction was never broadcast: the
+    model reports the deposit closed, the user stops watching it, and the tx is
+    still unsigned. ``usdctofiat_cashout`` already answers this with a ``signed``
+    flag, so the fix is one envelope across both tools rather than a new idiom.
+    """
+
+    def test_the_default_withdraw_is_labelled_unsigned(self, patched):
+        _create, _cashout, offramp = patched
+        payload = json.loads(usdctofiat_withdraw({"deposit_id": "42"}))
+
+        assert payload["signed"] is False
+        assert payload["prepared"]["data"] == "0xwithdraw"
+        # The bare tx must not also be the top-level object: that is the shape
+        # that reads as a finished withdrawal.
+        assert "to" not in payload
+        offramp.withdraw.assert_called_once_with("42", signer=None)
+
+    def test_an_injected_signer_is_labelled_signed(self, patched):
+        """The signed branch, which nothing exercised before."""
+        _create, _cashout, offramp = patched
+        offramp.withdraw.return_value = _result("fast")
+
+        def signer(tx):
+            return {"hash": "0x" + "cd" * 32}
+
+        payload = json.loads(usdctofiat_withdraw({"deposit_id": "42"}, signer=signer))
+
+        assert payload["signed"] is True
+        assert payload["result"]["tx_hash"] == "0x" + "ab" * 32
+        assert offramp.withdraw.call_args.kwargs["signer"] is signer
+
+    def test_a_string_signer_is_refused_before_the_vendor_is_called(self, patched):
+        """``withdraw`` takes a signer too, so it needs the same refusal."""
+        _create, _cashout, offramp = patched
+        payload = json.loads(usdctofiat_withdraw({"deposit_id": "42"}, signer="0x" + "ab" * 32))
+
+        assert "does not accept a private key" in payload["error"]
+        offramp.withdraw.assert_not_called()
 
 
 def test_estimate_mode_required():

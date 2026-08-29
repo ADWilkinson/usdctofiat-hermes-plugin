@@ -86,8 +86,13 @@ WATCH = {
 WITHDRAW = {
     "name": "usdctofiat_withdraw",
     "description": (
-        "Withdraw or close a USDCtoFiat deposit. Returns an unsigned withdraw tx "
-        "unless a host signer is already injected. Never pass a private key."
+        "Withdraw or close a USDCtoFiat deposit. The reply always carries a "
+        "signed flag. Without a host signer -- the default, since this plugin "
+        'never takes a key -- it returns {"prepared": {to, data, value, '
+        'chainId}, "signed": false}: an unsigned transaction that has NOT been '
+        "broadcast and still has to be signed in the host wallet, so the "
+        "deposit is not closed yet. Only signed: true means the withdrawal was "
+        "submitted. Never pass a private key."
     ),
     "parameters": {
         "type": "object",

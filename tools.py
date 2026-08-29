@@ -224,7 +224,14 @@ def usdctofiat_watch(args: dict, **kwargs) -> str:
 
 
 def usdctofiat_withdraw(args: dict, **kwargs) -> str:
-    """Withdraw / close a deposit. Unsigned unless a host signer is injected."""
+    """Withdraw / close a deposit. Unsigned unless a host signer is injected.
+
+    Both branches carry the ``signed`` flag ``usdctofiat_cashout`` already uses.
+    Unwrapped, the branch this plugin takes by default answered with a bare
+    ``{to, data, value, chainId}``: a transaction nobody has broadcast, with
+    nothing in it that says so. That reads as a completed withdrawal, so the
+    model reports the deposit closed while the tx is still sitting unsigned.
+    """
     try:
         _reject_keys(args)
         _reject_keys(kwargs)
@@ -233,7 +240,12 @@ def usdctofiat_withdraw(args: dict, **kwargs) -> str:
             return _dumps({"error": "Need deposit_id", "code": "VALIDATION"})
         signer = _host_signer(kwargs)
         result = _create_offramp().withdraw(deposit_id, signer=signer)
-        return _dumps(_as_dict(result))
+        # The signer this handler passed is what decides the shape coming back:
+        # an UnsignedTx without one, a CashoutResult with one. Reading our own
+        # argument beats sniffing the result's keys.
+        if signer is None:
+            return _dumps({"prepared": _as_dict(result), "signed": False})
+        return _dumps({"result": _as_dict(result), "signed": True})
     except Exception as exc:
         return _error(exc)
 

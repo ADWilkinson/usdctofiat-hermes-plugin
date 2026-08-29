@@ -98,6 +98,23 @@ def test_offramp_accepts_every_handler_call_shape():
     bind(offramp.deposits, offramp, "0x1111111111111111111111111111111111111111")
 
 
+def test_withdraw_returns_unsigned_without_a_signer_and_a_result_with_one():
+    """``usdctofiat_withdraw`` labels its reply from the signer it passed in.
+
+    That flag is only honest while the vendor keeps this correspondence, and an
+    inverted one would tell the model an unbroadcast transaction was sent. Both
+    calls are local calldata encoding against a stub signer -- no network,
+    nothing submitted.
+    """
+    offramp = tools._create_offramp()
+
+    unsigned = offramp.withdraw("42", signer=None)
+    assert isinstance(unsigned, usdctofiat.UnsignedTx)
+
+    signed = offramp.withdraw("42", signer=lambda tx: {"hash": "0x" + "cd" * 32})
+    assert isinstance(signed, usdctofiat.CashoutResult)
+
+
 def test_result_types_still_expose_as_dict():
     """``tools._as_dict`` degrades silently when ``as_dict`` disappears.
 
