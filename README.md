@@ -39,7 +39,7 @@ No API key. No `requires_env`. No private-key prompt.
 | `usdctofiat_cashout` | Wrap `usdctofiat.cashout`. `mode` required. Unsigned prepare unless a host signer is injected. |
 | `usdctofiat_estimate` | Estimate a cash-out. Not a locked quote. `mode` required. |
 | `usdctofiat_watch` | Watch a deposit by id (public indexer snapshot). |
-| `usdctofiat_withdraw` | Prepare an unsigned withdraw / close. |
+| `usdctofiat_withdraw` | Withdraw / close a deposit. Returns `signed: false` with an unsigned tx unless a host signer is injected. |
 | `usdctofiat_deposits` | List deposits for a `0x` owner on Base. |
 
 ## Usage
@@ -52,7 +52,7 @@ Ask Hermes to cash out, or call the tool with:
 - `platform`: payment rail such as `revolut`, `venmo`, or `monzo`
 - `payee`: handle on that platform
 
-`usdctofiat_cashout` returns JSON with `prepared` and `signed: false`. Sign `prepared.txs` in the host wallet. Never paste a private key into Hermes or this plugin.
+`usdctofiat_cashout` returns JSON with `prepared` and `signed: false`. Sign `prepared.txs` in the host wallet. `usdctofiat_withdraw` uses the same envelope: `signed: false` means the withdraw tx in `prepared` is unsigned and unbroadcast, so the deposit stays open until you sign it. Never paste a private key into Hermes or this plugin.
 
 ## Product lock
 
