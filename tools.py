@@ -73,8 +73,22 @@ def _import_client() -> Any:
     return usdctofiat
 
 
+def _live_indexer(client: Any) -> Any:
+    """The plugin's own reader for the deposit indexer. See live_indexer.py."""
+    try:
+        from . import live_indexer
+    except ImportError:  # loose directory / unit tests
+        import live_indexer
+    return live_indexer.LiveIndexer(client)
+
+
 def _create_offramp(**kwargs: Any) -> Any:
-    return _import_client().create_offramp(**kwargs)
+    client = _import_client()
+    # usdctofiat 0.1.0 queries a Ponder-shaped indexer that the live endpoint is
+    # not, so its own reader answers usdctofiat_deposits and usdctofiat_watch
+    # with a GraphQL validation error. Injecting ours is the client's own seam.
+    kwargs.setdefault("indexer", _live_indexer(client))
+    return client.create_offramp(**kwargs)
 
 
 def _cashout(**kwargs: Any) -> Any:
