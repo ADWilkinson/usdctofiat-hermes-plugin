@@ -127,6 +127,35 @@ def test_result_types_still_expose_as_dict():
         assert hasattr(result_type, "as_dict"), f"usdctofiat.{name} lost as_dict"
 
 
+def test_the_indexer_seam_this_plugin_injects_on_still_exists():
+    """``live_indexer`` replaces the client's deposit reader on a public argument.
+
+    ``Offramp`` reads deposits only through ``self.indexer``, so a constructor
+    that stopped accepting the argument, or methods that stopped going through
+    the attribute, would silently put the vendor's broken queries back in front
+    of usdctofiat_deposits and usdctofiat_watch.
+    """
+    sentinel = object()
+    offramp = usdctofiat.Offramp(indexer=sentinel)
+    assert offramp.indexer is sentinel
+    bind(usdctofiat.create_offramp, indexer=sentinel)
+
+
+def test_the_indexer_internals_live_indexer_borrows_still_exist():
+    """It borrows the vendor's transport rather than opening a second one.
+
+    Only the two queries are this plugin's; the httpx client, the timeout and
+    the error mapping stay the client's, reached through ``Indexer._graphql``.
+    ``ESCROW_V2`` is how a bare EscrowV2 id becomes the composite the indexer
+    keys on.
+    """
+    assert callable(usdctofiat.indexer.Indexer._graphql)
+    bind(usdctofiat.indexer.Indexer._graphql, usdctofiat.indexer.Indexer(), "query", {})
+    assert issubclass(usdctofiat.errors.IndexerError, usdctofiat.UsdctoFiatError)
+    assert usdctofiat.errors.IndexerError("x").code == "INDEXER"
+    assert str(usdctofiat.ESCROW_V2).startswith("0x")
+
+
 def test_vendor_errors_reach_the_json_error_path():
     """Handlers catch ``Exception``; vendor errors must stay inside that."""
     assert issubclass(usdctofiat.UsdctoFiatError, Exception)

@@ -13,6 +13,8 @@ This is a standalone plugin repo. It is not part of `NousResearch/hermes-agent`.
 
 The plugin never accepts a wallet private key. It wraps [`usdctofiat.cashout`](https://pypi.org/project/usdctofiat/) (`usdctofiat>=0.1.0`). Without a host signer callback it returns unsigned `{to, data, value, chainId}` transactions for you to sign outside Hermes.
 
+The deposit reads are the one thing it does not take from the client. `usdctofiat` 0.1.0 queries the indexer as if it were Ponder-shaped, and the public indexer it points at is Hasura, so `usdctofiat_deposits` and `usdctofiat_watch` answered every call with `field 'deposits' not found in type: 'query_root'`. `live_indexer.py` replaces those two queries on the client's own `indexer=` seam and leaves its transport, timeouts and errors alone. It goes when a `usdctofiat` release answers against the live endpoint on its own.
+
 Developer docs: https://usdctofiat.xyz/developers
 
 ## Install
@@ -38,7 +40,7 @@ No API key. No `requires_env`. No private-key prompt.
 | --- | --- |
 | `usdctofiat_cashout` | Wrap `usdctofiat.cashout`. `mode` required. Unsigned prepare unless a host signer is injected. |
 | `usdctofiat_estimate` | Estimate a cash-out. Not a locked quote. `mode` required. |
-| `usdctofiat_watch` | Watch a deposit by id (public indexer snapshot). |
+| `usdctofiat_watch` | Watch a deposit by id (public indexer snapshot). Takes the composite `<escrow>_<id>` or a bare EscrowV2 id. |
 | `usdctofiat_withdraw` | Withdraw / close a deposit. Returns `signed: false` with an unsigned tx unless a host signer is injected. |
 | `usdctofiat_deposits` | List deposits for a `0x` owner on Base. |
 
@@ -71,8 +73,9 @@ Native Hermes directory plugin (`plugin.yaml` + `register(ctx)`):
 ├── __init__.py      # register()
 ├── schemas.py       # what the LLM sees
 ├── tools.py         # wraps usdctofiat.cashout
+├── live_indexer.py  # reads the deposit indexer the client points at
 ├── tests/           # mocked tool tests + installer/vendor/host contract guards
-└── scripts/         # regenerate the pinned snapshot; run the real install scan
+└── scripts/         # regenerate the pinned snapshot; run the install scan and the indexer check
 ```
 
 ## Tests
@@ -82,14 +85,17 @@ pip install "usdctofiat>=0.1.0" pytest
 pytest
 ```
 
-Tool behaviour is tested against a mocked client. Four guards check the real contracts instead:
+Tool behaviour is tested against a mocked client. Five guards check the real contracts instead:
 
-- the installed `usdctofiat` call surface;
+- the installed `usdctofiat` call surface, including the `indexer=` seam `live_indexer.py` injects on;
 - the Hermes installer's manifest ceiling;
 - the security scan the installer runs on the clone before it installs, where a `caution` verdict refuses the documented one-line install rather than merely warning;
-- the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`).
+- the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`);
+- the deposit reads, against the shape the live indexer answers with.
 
-The Hermes shapes are captured from a pinned revision into `tests/hermes_pinned.py`, so the whole suite runs offline; `scripts/refresh_hermes_pin.py` regenerates that file when the pin moves, and a weekly workflow re-derives it to prove it is still faithful. The scan guard re-implements only the scanner's structural half offline, so the same weekly workflow runs `scripts/hermes_install_scan.py`, which executes the real scanner from the pinned revision over the tracked tree. Nothing sends a transaction or reads a key.
+The Hermes shapes are captured from a pinned revision into `tests/hermes_pinned.py`, so the whole suite runs offline; `scripts/refresh_hermes_pin.py` regenerates that file when the pin moves, and a weekly workflow re-derives it to prove it is still faithful. The scan guard re-implements only the scanner's structural half offline, so the same weekly workflow runs `scripts/hermes_install_scan.py`, which executes the real scanner from the pinned revision over the tracked tree.
+
+The offline suite patches the client, so it can only prove the plugin reads an indexer answer correctly, never that the indexer still answers that way. A second weekly workflow runs `scripts/live_indexer_check.py`, which drives `usdctofiat_deposits` and `usdctofiat_watch` against the real indexer and fails if either stops returning a deposit. Neither weekly workflow gates a merge: both read services nobody here operates. Nothing sends a transaction or reads a key.
 
 ## Source and support
 

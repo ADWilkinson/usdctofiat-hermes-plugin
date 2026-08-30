@@ -1,0 +1,44 @@
+name: live indexer
+
+# Drives usdctofiat_deposits and usdctofiat_watch against the real indexer.
+#
+# Both tools shipped answering every call with `field 'deposits' not found in
+# type: 'query_root'`: the client's queries were written for a Ponder-shaped
+# endpoint and the live one is Hasura. The whole offline suite stayed green,
+# because it patches the client rather than asking the indexer anything. This
+# is the check that would have caught it, and the one that catches the endpoint
+# moving again.
+#
+# Deliberately not a pull-request check, for the reason hermes-pin.yml is not:
+# it reads a service nobody here operates, and an outage or a rate limit there
+# is not a reason to block a merge. Read-only -- no key, no transaction.
+
+on:
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: the read tools still answer with a deposit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the client
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Ask the indexer
+        run: python scripts/live_indexer_check.py
