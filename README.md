@@ -50,9 +50,11 @@ Ask Hermes to cash out, or call the tool with:
 
 - `mode`: `fast` or `best` (required, no default)
 - `amount`: human USDC amount (an int is six-decimal units)
-- `currency`: fiat ISO code such as `EUR`, `USD`, or `GBP`
+- `currency`: fiat ISO code such as `EUR`, `USD`, or `GBP`. Only the codes EscrowV2 deposits are actually denominated in are accepted; anything else is refused by name.
 - `platform`: payment rail such as `revolut`, `venmo`, or `monzo`
 - `payee`: handle on that platform
+
+`currency` is the one argument the client does not refuse for you. It validates `platform` against its catalog and names the supported rails, but hashes an unrecognised currency straight through — so `euros`, `EURO` or `dollars`, the codes a model writes when the user says "cash out to euros", each produced a real `createDeposit` tx denominated in a currency no taker can fill. The plugin refuses a code the protocol holds no deposits in, before the curator call `prepare` opens with. The set is read off the live indexer and re-derived weekly.
 
 `usdctofiat_cashout` returns JSON with `prepared` and `signed: false`. Sign `prepared.txs` in the host wallet. `usdctofiat_withdraw` uses the same envelope: `signed: false` means the withdraw tx in `prepared` is unsigned and unbroadcast, so the deposit stays open until you sign it. Never paste a private key into Hermes or this plugin.
 
@@ -95,7 +97,7 @@ Tool behaviour is tested against a mocked client. Five guards check the real con
 
 The Hermes shapes are captured from a pinned revision into `tests/hermes_pinned.py`, so the whole suite runs offline; `scripts/refresh_hermes_pin.py` regenerates that file when the pin moves, and a weekly workflow re-derives it to prove it is still faithful. The scan guard re-implements only the scanner's structural half offline, so the same weekly workflow runs `scripts/hermes_install_scan.py`, which executes the real scanner from the pinned revision over the tracked tree.
 
-The offline suite patches the client, so it can only prove the plugin reads an indexer answer correctly, never that the indexer still answers that way. A second weekly workflow runs `scripts/live_indexer_check.py`, which drives `usdctofiat_deposits` and `usdctofiat_watch` against the real indexer and fails if either stops returning a deposit. Neither weekly workflow gates a merge: both read services nobody here operates. Nothing sends a transaction or reads a key.
+The offline suite patches the client, so it can only prove the plugin reads an indexer answer correctly, never that the indexer still answers that way. A second weekly workflow runs `scripts/live_indexer_check.py`, which drives `usdctofiat_deposits` and `usdctofiat_watch` against the real indexer and fails if either stops returning a deposit, and re-derives the accepted currency set so the copy in `tools.py` cannot drift from the protocol in either direction. Neither weekly workflow gates a merge: both read services nobody here operates. Nothing sends a transaction or reads a key.
 
 ## Source and support
 

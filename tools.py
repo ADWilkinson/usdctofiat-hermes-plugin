@@ -47,12 +47,49 @@ _BANNED_KEY_MARKERS = (
 _COMPOSITE_DEPOSIT_ID = re.compile(r"^(0[xX][0-9a-fA-F]{40})_([0-9]+)$")
 _ESCROW_DEPOSIT_ID = re.compile(r"^[0-9]+$")
 
+# The fiat currencies EscrowV2 deposits are actually denominated in on Base,
+# read off the live indexer (`DepositCurrencyLiquidity.currencyCode`, distinct)
+# and resolved back through keccak256 of the ISO code.
+#
+# The vendor validates `platform` against its catalog and refuses an unknown one
+# by name, but `calldata.currency_hash` falls through to `keccak(text=key)` for
+# anything it does not recognise. So "euros", "EURO" or "dollars" -- the codes a
+# model writes when the user says "cash out to euros" -- each hash to a
+# well-formed 32 bytes and ride into a real createDeposit tx. The reply is an
+# ordinary unsigned prepare with nothing in it that says the currency is
+# meaningless, so signing it moves USDC into a deposit no taker can fill and
+# only usdctofiat_withdraw can undo.
+#
+# Refusing is deliberately strict, and asymmetric on purpose: a currency the
+# protocol adds later costs a caller a named error they can act on, while a
+# currency it never had costs them a locked deposit. scripts/live_indexer_check.py
+# re-derives this set weekly and fails when it drifts.
+SUPPORTED_CURRENCIES = frozenset(
+    {
+        "AED", "ARS", "AUD", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP",
+        "HKD", "HUF", "IDR", "ILS", "INR", "JPY", "KES", "MXN", "MYR", "NOK",
+        "NZD", "PHP", "PLN", "RON", "SAR", "SEK", "SGD", "THB", "TRY", "UGX",
+        "USD", "VND", "ZAR",
+    }
+)
+
 
 class InvalidDepositId(Exception):
     """The deposit id is neither id ``usdctofiat_withdraw`` advertises.
 
     Carries the ``VALIDATION`` code its sibling checks already use, so a
     mistyped id reads as bad input rather than as a vendor or network failure.
+    """
+
+    code = "VALIDATION"
+
+
+class UnsupportedCurrency(Exception):
+    """The fiat code is not one the protocol holds deposits in.
+
+    Carries ``VALIDATION`` for the same reason ``InvalidDepositId`` does: this is
+    bad input, not a vendor or network failure, and the model has to be able to
+    tell the difference to know that retrying will not help.
     """
 
     code = "VALIDATION"
@@ -203,6 +240,28 @@ def _require_mode(args: dict[str, Any]) -> str:
     return key
 
 
+def _require_currency(args: dict[str, Any]) -> str:
+    """Refuse a fiat code the protocol has no deposits in, and name the ones it has.
+
+    Runs before the client is touched, so an unsupported code costs neither the
+    curator round-trip ``prepare`` opens with nor a createDeposit tx encoded
+    against a currency hash that means nothing.
+    """
+    currency = args.get("currency")
+    code = str(currency or "").strip().upper()
+    if not code:
+        raise UnsupportedCurrency(
+            "currency is required. Pass a fiat ISO code such as EUR, USD or GBP."
+        )
+    if code not in SUPPORTED_CURRENCIES:
+        raise UnsupportedCurrency(
+            f"currency {currency!r} is not a fiat currency USDCtoFiat deposits are "
+            "denominated in, so a deposit created in it could not be filled. "
+            f"Supported: {', '.join(sorted(SUPPORTED_CURRENCIES))}."
+        )
+    return code
+
+
 def _host_signer(kwargs: dict[str, Any]) -> Callable[..., Any] | None:
     """A host may pass a signer callback. Never a key string."""
     signer = kwargs.get("signer")
@@ -227,11 +286,11 @@ def usdctofiat_cashout(args: dict, **kwargs) -> str:
         _reject_keys(kwargs)
         mode = _require_mode(args)
         amount = args.get("amount")
-        currency = args.get("currency")
         platform = args.get("platform")
         payee = args.get("payee")
-        if amount in (None, "") or not currency or not platform or not payee:
+        if amount in (None, "") or not args.get("currency") or not platform or not payee:
             return _dumps({"error": "Need amount, currency, platform, and payee", "code": "VALIDATION"})
+        currency = _require_currency(args)
         signer = _host_signer(kwargs)
         if signer is None:
             prepared = _create_offramp().prepare(
@@ -262,9 +321,9 @@ def usdctofiat_estimate(args: dict, **kwargs) -> str:
         _reject_keys(kwargs)
         mode = _require_mode(args)
         amount = args.get("amount")
-        currency = args.get("currency")
-        if amount in (None, "") or not currency:
+        if amount in (None, "") or not args.get("currency"):
             return _dumps({"error": "Need amount and currency", "code": "VALIDATION"})
+        currency = _require_currency(args)
         estimate = _create_offramp().estimate(mode=mode, amount=amount, currency=currency)
         return _dumps(_as_dict(estimate))
     except Exception as exc:

@@ -17,6 +17,13 @@ here is local calldata encoding with no signer. Only shapes and counts are
 printed -- the addresses are public on-chain data, but a CI log is not where
 they belong.
 
+It also re-derives ``tools.SUPPORTED_CURRENCIES``. That set is a copy of live
+state -- the fiat codes EscrowV2 deposits are actually denominated in -- and
+``usdctofiat_cashout`` refuses anything outside it, because the vendor hashes an
+unrecognised code into a deposit no taker can fill. A stale copy is the same
+defect facing the other way, so the copy is checked against the indexer here
+rather than trusted.
+
 Weekly and out of the merge path, for the same reason ``hermes-pin.yml`` is:
 this reads a service nobody here operates, and an unrelated outage should not
 turn a required check red.
@@ -34,7 +41,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import tools  # noqa: E402
 
+from usdctofiat.calldata import currency_hash  # noqa: E402
 from usdctofiat.constants import INDEXER_URL  # noqa: E402
+
+CURRENCIES_QUERY = """
+query LiveCurrencies {
+  DepositCurrencyLiquidity(distinct_on: currencyCode) {
+    currencyCode
+  }
+}
+"""
 
 SEED_QUERY = """
 query NewestDeposit {
@@ -69,6 +85,43 @@ def seed() -> dict[str, str]:
     return rows[0]
 
 
+def live_currencies() -> set[str]:
+    """The currency hashes EscrowV2 deposits are actually denominated in.
+
+    Hashed rather than named on the indexer, so it is read back through the
+    vendor's own ``currency_hash`` -- the same function that encodes the code
+    into a createDeposit tx. A code that round-trips here is a code the plugin
+    would build a fillable deposit for.
+    """
+    response = httpx.post(INDEXER_URL, json={"query": CURRENCIES_QUERY}, timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    if body.get("errors"):
+        raise SystemExit(f"currency query failed: {json.dumps(body['errors'])[:300]}")
+    return {row["currencyCode"] for row in body["data"]["DepositCurrencyLiquidity"]}
+
+
+def check_supported_currencies() -> None:
+    """``tools.SUPPORTED_CURRENCIES`` is a copy of live state, so re-derive it.
+
+    ``usdctofiat_cashout`` refuses any code outside that set, because the vendor
+    silently keccaks an unknown one into a deposit no taker can fill. A copy that
+    drifts is the same defect wearing the other face: a currency the protocol
+    added, refused by name to a caller who could have used it.
+    """
+    live = live_currencies()
+    named = {currency_hash(code): code for code in tools.SUPPORTED_CURRENCIES}
+    unlisted = sorted(named[h] for h in named.keys() - live)
+    unknown = sorted(live - named.keys())
+    check(
+        "SUPPORTED_CURRENCIES still matches the indexer",
+        not unlisted and not unknown,
+        f"listed but no longer on any deposit: {unlisted or 'none'}; "
+        f"on {len(unknown)} deposit currenc(ies) the plugin would refuse -- "
+        "re-derive the set in tools.py",
+    )
+
+
 def main() -> int:
     row = seed()
     owner, composite, numeric = row["depositor"], row["id"], str(row["depositId"])
@@ -96,6 +149,8 @@ def main() -> int:
         prepared.get("signed") is False and bool(prepared.get("prepared", {}).get("data")),
         prepared.get("error", ""),
     )
+
+    check_supported_currencies()
 
     missing = json.loads(tools.usdctofiat_watch({"deposit_id": "0" * 40 + "_0"}))
     check(

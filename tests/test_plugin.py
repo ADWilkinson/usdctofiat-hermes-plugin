@@ -596,3 +596,86 @@ class TestClientNotInstalled:
         payload = json.loads(usdctofiat_estimate({"mode": "fast", "amount": "1", "currency": "EUR"}))
         assert payload["code"] == "ModuleNotFoundError"
         assert "httpx" in payload["error"]
+
+
+class TestCurrencyMustBeOneTheProtocolHolds:
+    """``platform`` is refused by name; ``currency`` was not refused at all.
+
+    The vendor validates a platform against its catalog and raises naming the
+    supported set, but ``calldata.currency_hash`` falls through to
+    ``keccak(text=key)`` for anything it does not recognise. "euros", "EURO" and
+    "dollars" -- what a model writes when the user says "cash out to euros" --
+    therefore each produced a well-formed currency hash and a real createDeposit
+    tx, returned as an ordinary ``signed: false`` prepare with nothing in it
+    saying the currency was meaningless. Signing that moves USDC into a deposit
+    no taker can fill.
+
+    The refusal has to land before the client is reached: ``prepare`` opens with
+    a live curator POST, so a bad code must not get that far.
+    """
+
+    ARGS = {"mode": "fast", "amount": "100", "platform": "revolut", "payee": "alice"}
+
+    @pytest.mark.parametrize("code", ["EUR", "USD", "GBP", "AUD", "JPY", "ZAR"])
+    def test_a_currency_the_protocol_holds_is_accepted(self, code, patched):
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "currency": code}))
+
+        assert payload["signed"] is False
+        assert offramp.prepare.call_args.kwargs["currency"] == code
+
+    @pytest.mark.parametrize("code", ["euros", "EURO", "dollars", "XYZ", "   "])
+    def test_a_currency_it_does_not_hold_is_refused_by_name(self, code, patched):
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "currency": code}))
+
+        assert payload["code"] == "VALIDATION"
+        assert "EUR" in payload["error"]
+        # Never reached the vendor, so never reached the curator POST prepare opens with.
+        offramp.prepare.assert_not_called()
+
+    def test_the_unsigned_prepare_it_replaces_is_not_what_ships(self, patched):
+        """The failure mode: a signable tx handed back for a meaningless currency."""
+        _create, _cashout, _offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "currency": "euros"}))
+
+        assert "prepared" not in payload
+        assert payload.get("signed") is not False
+
+    @pytest.mark.parametrize("code", ["eur", " gbp ", "Usd"])
+    def test_casing_and_padding_are_normalised_rather_than_refused(self, code, patched):
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "currency": code}))
+
+        assert payload["signed"] is False
+        assert offramp.prepare.call_args.kwargs["currency"] == code.strip().upper()
+
+    def test_estimate_refuses_it_too(self, patched):
+        """An estimate in a currency nothing can fill is a quote for nothing."""
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(usdctofiat_estimate({"mode": "fast", "amount": "100", "currency": "euros"}))
+
+        assert payload["code"] == "VALIDATION"
+        offramp.estimate.assert_not_called()
+
+    def test_an_absent_currency_still_reads_as_the_missing_argument(self, patched):
+        """Not the unsupported-currency error: nothing was passed to support."""
+        _create, _cashout, _offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "currency": ""}))
+
+        assert payload["error"] == "Need amount, currency, platform, and payee"
+
+    def test_the_schema_offers_only_currencies_the_guard_accepts(self):
+        """A model that obeys the enum can never be refused by the handler."""
+        import schemas
+        from tools import SUPPORTED_CURRENCIES
+
+        for schema in (schemas.CASHOUT, schemas.ESTIMATE):
+            offered = schema["parameters"]["properties"]["currency"]["enum"]
+            assert offered == sorted(SUPPORTED_CURRENCIES)
