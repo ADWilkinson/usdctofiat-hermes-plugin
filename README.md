@@ -49,12 +49,14 @@ No API key. No `requires_env`. No private-key prompt.
 Ask Hermes to cash out, or call the tool with:
 
 - `mode`: `fast` or `best` (required, no default)
-- `amount`: human USDC amount (an int is six-decimal units)
+- `amount`: human USDC amount, as a string — `"500"` is 500 USDC
 - `currency`: fiat ISO code such as `EUR`, `USD`, or `GBP`. Only the codes EscrowV2 deposits are actually denominated in are accepted; anything else is refused by name.
 - `platform`: payment rail such as `revolut`, `venmo`, or `monzo`
 - `payee`: handle on that platform
 
 `currency` is the one argument the client does not refuse for you. It validates `platform` against its catalog and names the supported rails, but hashes an unrecognised currency straight through — so `euros`, `EURO` or `dollars`, the codes a model writes when the user says "cash out to euros", each produced a real `createDeposit` tx denominated in a currency no taker can fill. The plugin refuses a code the protocol holds no deposits in, before the curator call `prepare` opens with. The set is read off the live indexer and re-derived weekly.
+
+`amount` is the other argument whose wrong reading is silent. The client splits on Python type rather than value — an int is exact six-decimal base units, a string or float is human USDC — and JSON has one number type, so a model writing `500` for "cash out 500 USDC" lands on the wrong side of that split. Below 1,000,000 it comes back as `minimum 1 USDC`, a floor the caller is a thousand times above, so the turn dead-ends on an error naming neither the fault nor the fix; at or above it there is no error at all and `2000000` prepares a 2 USDC deposit. The plugin refuses a bare integer and names the string to retry with, rather than guessing a reading — guessing wrong the other way is a deposit a million times too large.
 
 `usdctofiat_cashout` returns JSON with `prepared` and `signed: false`. Sign `prepared.txs` in the host wallet. `usdctofiat_withdraw` uses the same envelope: `signed: false` means the withdraw tx in `prepared` is unsigned and unbroadcast, so the deposit stays open until you sign it. Never paste a private key into Hermes or this plugin.
 

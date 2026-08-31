@@ -95,6 +95,21 @@ class UnsupportedCurrency(Exception):
     code = "VALIDATION"
 
 
+class AmbiguousAmount(Exception):
+    """The amount is a bare integer, which the vendor reads as base units.
+
+    ``calldata.parse_usdc_amount`` splits on type, not on value: an ``int`` is
+    exact six-decimal units, while a ``str``, ``float`` or ``Decimal`` is human
+    USDC. The two readings of the same number differ by a factor of a million,
+    and nothing downstream says which one was taken.
+
+    Carries ``VALIDATION`` like its siblings, because a named error the model can
+    retry against is the whole point.
+    """
+
+    code = "VALIDATION"
+
+
 class ClientNotInstalled(Exception):
     """The vendor client is absent, so say which command installs it.
 
@@ -262,6 +277,39 @@ def _require_currency(args: dict[str, Any]) -> str:
     return code
 
 
+def _require_amount(args: dict[str, Any]) -> Any:
+    """Refuse a bare integer amount, which means something else than it reads.
+
+    ``calldata.parse_usdc_amount`` dispatches on the Python type: an ``int`` is
+    exact six-decimal base units, everything else is human USDC. A model asked
+    to cash out 500 USDC writes ``500`` -- JSON has one number type and Hermes
+    dispatches ``handler(args, **kwargs)`` without validating an argument
+    against the schema, so the int arrives as an int. Both readings of it are
+    wrong, in opposite ways:
+
+    * under 1_000_000 the vendor refuses with ``minimum 1 USDC`` -- a floor the
+      caller is a thousand times above -- so the turn dead-ends on an error that
+      describes neither the fault nor the fix, and the retry looks identical;
+    * at or above it the number is accepted as units, so ``2000000`` prepares a
+      2 USDC deposit for a two-million-USDC request and comes back as an
+      ordinary ``signed: false`` prepare with nothing in it that says so.
+
+    Naming the ambiguity costs one retry. Silently reading the int as human USDC
+    would cost the opposite mistake -- a deposit a million times too large for
+    anyone who did mean units -- and this plugin refuses rather than guesses
+    whenever a wrong guess is a transaction. ``"500"`` and ``500.0`` are both
+    unambiguous and pass through untouched.
+    """
+    amount = args.get("amount")
+    if isinstance(amount, int):  # bool is an int, and is no more an amount
+        raise AmbiguousAmount(
+            f"amount {amount!r} is an integer, which usdctofiat reads as exact "
+            "six-decimal base units rather than USDC. Pass the human USDC "
+            f'amount as a string instead: amount="{amount}".'
+        )
+    return amount
+
+
 def _host_signer(kwargs: dict[str, Any]) -> Callable[..., Any] | None:
     """A host may pass a signer callback. Never a key string."""
     signer = kwargs.get("signer")
@@ -285,11 +333,11 @@ def usdctofiat_cashout(args: dict, **kwargs) -> str:
         _reject_keys(args)
         _reject_keys(kwargs)
         mode = _require_mode(args)
-        amount = args.get("amount")
         platform = args.get("platform")
         payee = args.get("payee")
-        if amount in (None, "") or not args.get("currency") or not platform or not payee:
+        if args.get("amount") in (None, "") or not args.get("currency") or not platform or not payee:
             return _dumps({"error": "Need amount, currency, platform, and payee", "code": "VALIDATION"})
+        amount = _require_amount(args)
         currency = _require_currency(args)
         signer = _host_signer(kwargs)
         if signer is None:
@@ -320,9 +368,9 @@ def usdctofiat_estimate(args: dict, **kwargs) -> str:
         _reject_keys(args)
         _reject_keys(kwargs)
         mode = _require_mode(args)
-        amount = args.get("amount")
-        if amount in (None, "") or not args.get("currency"):
+        if args.get("amount") in (None, "") or not args.get("currency"):
             return _dumps({"error": "Need amount and currency", "code": "VALIDATION"})
+        amount = _require_amount(args)
         currency = _require_currency(args)
         estimate = _create_offramp().estimate(mode=mode, amount=amount, currency=currency)
         return _dumps(_as_dict(estimate))

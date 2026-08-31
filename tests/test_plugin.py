@@ -679,3 +679,89 @@ class TestCurrencyMustBeOneTheProtocolHolds:
         for schema in (schemas.CASHOUT, schemas.ESTIMATE):
             offered = schema["parameters"]["properties"]["currency"]["enum"]
             assert offered == sorted(SUPPORTED_CURRENCIES)
+
+
+class TestAmountMustNotBeABareInteger:
+    """``currency`` was hashed through; ``amount`` is read as the wrong unit.
+
+    ``calldata.parse_usdc_amount`` dispatches on the Python type rather than the
+    value: an ``int`` is exact six-decimal base units, a ``str`` or ``float`` is
+    human USDC. JSON has one number type, and Hermes' registry dispatches
+    ``handler(args, **kwargs)`` without validating an argument against the
+    schema, so a model that writes ``500`` for "cash out 500 USDC" reaches the
+    vendor with an int and gets one of two wrong answers: ``minimum 1 USDC``
+    below 1_000_000 -- a floor the caller is far above, so the turn dead-ends on
+    an error naming neither the fault nor the fix -- or, at or above it, an
+    ordinary ``signed: false`` prepare for a deposit a million times too small.
+
+    ``tests/test_client_contract.py`` holds the vendor half of this claim.
+    """
+
+    ARGS = {"mode": "fast", "currency": "EUR", "platform": "revolut", "payee": "alice"}
+
+    @pytest.mark.parametrize("amount", [1, 500, 1_000_000, 2_000_000, 0, True])
+    def test_an_integer_amount_is_refused_before_the_vendor(self, amount, patched):
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "amount": amount}))
+
+        assert payload["code"] == "VALIDATION"
+        assert "base units" in payload["error"]
+        # prepare opens with a live curator POST, and would encode a createDeposit
+        # tx for the wrong size. Neither happens.
+        offramp.prepare.assert_not_called()
+
+    def test_the_refusal_names_the_string_to_retry_with(self, patched):
+        """One retry away: the error carries the amount the caller meant."""
+        _create, _cashout, _offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "amount": 500}))
+
+        assert 'amount="500"' in payload["error"]
+
+    def test_the_undersized_prepare_it_replaces_is_not_what_ships(self, patched):
+        """The failure mode above the floor: a signable tx for 2 USDC, not 2m."""
+        _create, _cashout, _offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "amount": 2_000_000}))
+
+        assert "prepared" not in payload
+        assert payload.get("signed") is not False
+
+    @pytest.mark.parametrize("amount", ["500", "1.5", 500.0, "2000000"])
+    def test_an_unambiguous_amount_passes_through_untouched(self, amount, patched):
+        """Strings and floats already mean human USDC. Nothing is coerced."""
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "amount": amount}))
+
+        assert payload["signed"] is False
+        assert offramp.prepare.call_args.kwargs["amount"] == amount
+
+    def test_estimate_refuses_it_too(self, patched):
+        """An estimate off by a million is what the cash-out is decided on."""
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(usdctofiat_estimate({"mode": "fast", "amount": 500, "currency": "EUR"}))
+
+        assert payload["code"] == "VALIDATION"
+        offramp.estimate.assert_not_called()
+
+    def test_an_absent_amount_still_reads_as_the_missing_argument(self, patched):
+        """Not the ambiguity error: nothing was passed to be ambiguous."""
+        _create, _cashout, _offramp = patched
+
+        payload = json.loads(usdctofiat_cashout({**self.ARGS, "amount": None}))
+
+        assert payload["error"] == "Need amount, currency, platform, and payee"
+
+    def test_the_signed_branch_is_guarded_as_well(self, patched):
+        """With a host signer the vendor submits, so the size is final."""
+        _create, cashout, _offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "amount": 2_000_000}, signer=lambda tx: tx)
+        )
+
+        assert payload["code"] == "VALIDATION"
+        cashout.assert_not_called()
