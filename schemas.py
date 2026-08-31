@@ -99,7 +99,10 @@ WITHDRAW = {
         "properties": {
             "deposit_id": {
                 "type": "string",
-                "description": "EscrowV2 deposit id.",
+                "description": (
+                    "The id usdctofiat_deposits returned (<escrow>_<EscrowV2 id>), "
+                    "or the EscrowV2 id on its own."
+                ),
             },
         },
         "required": ["deposit_id"],

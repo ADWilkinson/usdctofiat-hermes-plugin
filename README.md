@@ -41,7 +41,7 @@ No API key. No `requires_env`. No private-key prompt.
 | `usdctofiat_cashout` | Wrap `usdctofiat.cashout`. `mode` required. Unsigned prepare unless a host signer is injected. |
 | `usdctofiat_estimate` | Estimate a cash-out. Not a locked quote. `mode` required. |
 | `usdctofiat_watch` | Watch a deposit by id (public indexer snapshot). Takes the composite `<escrow>_<id>` or a bare EscrowV2 id. |
-| `usdctofiat_withdraw` | Withdraw / close a deposit. Returns `signed: false` with an unsigned tx unless a host signer is injected. |
+| `usdctofiat_withdraw` | Withdraw / close a deposit. Takes the same two ids as `usdctofiat_watch`. Returns `signed: false` with an unsigned tx unless a host signer is injected. |
 | `usdctofiat_deposits` | List deposits for a `0x` owner on Base. |
 
 ## Usage

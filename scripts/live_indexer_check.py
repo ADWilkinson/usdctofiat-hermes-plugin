@@ -9,9 +9,13 @@ answers. Nothing in this repository had ever asked the indexer a question.
 
 So this does. It seeds itself from the newest deposit the indexer holds rather
 than pinning an address, then drives the tool handlers exactly as Hermes would
-and fails if either comes back without a deposit. Read-only: one GraphQL read
-per call, no key, no transaction. Only shapes and counts are printed -- the
-addresses are public on-chain data, but a CI log is not where they belong.
+and fails if either comes back without a deposit. It then hands that same id to
+``usdctofiat_withdraw``, because the composite key the indexer hands back is the
+only deposit id a caller ever sees, and the vendor withdraws on the EscrowV2 id
+alone. No key, and nothing is signed or broadcast: the withdraw branch exercised
+here is local calldata encoding with no signer. Only shapes and counts are
+printed -- the addresses are public on-chain data, but a CI log is not where
+they belong.
 
 Weekly and out of the merge path, for the same reason ``hermes-pin.yml`` is:
 this reads a service nobody here operates, and an unrelated outage should not
@@ -84,6 +88,15 @@ def main() -> int:
         watched = json.loads(tools.usdctofiat_watch({"deposit_id": deposit_id}))
         check(f"usdctofiat_watch resolves a {label}", bool(watched.get("snapshots")), watched.get("error", ""))
 
+    # The read -> withdraw handoff, on a real id rather than a fixture one.
+    # Unsigned: no signer is passed, so this only encodes calldata.
+    prepared = json.loads(tools.usdctofiat_withdraw({"deposit_id": composite}))
+    check(
+        "usdctofiat_withdraw accepts the id usdctofiat_deposits returned",
+        prepared.get("signed") is False and bool(prepared.get("prepared", {}).get("data")),
+        prepared.get("error", ""),
+    )
+
     missing = json.loads(tools.usdctofiat_watch({"deposit_id": "0" * 40 + "_0"}))
     check(
         "usdctofiat_watch says not found rather than erroring",
@@ -94,7 +107,7 @@ def main() -> int:
     if failures:
         print(f"\n{len(failures)} check(s) failed: {', '.join(failures)}")
         return 1
-    print("\nlive indexer: every read tool answered with a deposit")
+    print("\nlive indexer: every read tool answered with a deposit, and withdraw took its id")
     return 0
 
 
