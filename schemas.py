@@ -1,5 +1,14 @@
 """Tool schemas — what the Hermes LLM sees."""
 
+try:
+    from .tools import SUPPORTED_CURRENCIES
+except ImportError:  # loose directory / unit tests
+    from tools import SUPPORTED_CURRENCIES
+
+# The enum keeps the model from inventing "euros" in the first place; the handler
+# guard that owns this set refuses it anyway, because a schema is advice.
+_CURRENCIES = sorted(SUPPORTED_CURRENCIES)
+
 CASHOUT = {
     "name": "usdctofiat_cashout",
     "description": (
@@ -25,7 +34,8 @@ CASHOUT = {
             },
             "currency": {
                 "type": "string",
-                "description": "Fiat ISO code, e.g. EUR, USD, GBP.",
+                "enum": _CURRENCIES,
+                "description": "Fiat ISO code the deposit is denominated in, e.g. EUR, USD, GBP.",
             },
             "platform": {
                 "type": "string",
@@ -61,7 +71,8 @@ ESTIMATE = {
             },
             "currency": {
                 "type": "string",
-                "description": "Fiat ISO code, e.g. EUR, USD, GBP.",
+                "enum": _CURRENCIES,
+                "description": "Fiat ISO code the deposit is denominated in, e.g. EUR, USD, GBP.",
             },
         },
         "required": ["mode", "amount", "currency"],
