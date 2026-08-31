@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 import usdctofiat
 
 import tools
@@ -92,8 +94,8 @@ def test_offramp_accepts_every_handler_call_shape():
     bind(offramp.estimate, offramp, mode="fast", amount="100", currency="EUR")
     # usdctofiat_watch
     bind(offramp.watch, offramp, "42")
-    # usdctofiat_withdraw, signer is None without a host callback
-    bind(offramp.withdraw, offramp, "42", signer=None)
+    # usdctofiat_withdraw, on the EscrowV2 id tools._escrow_deposit_id resolved
+    bind(offramp.withdraw, offramp, 42, signer=None)
     # usdctofiat_deposits
     bind(offramp.deposits, offramp, "0x1111111111111111111111111111111111111111")
 
@@ -113,6 +115,24 @@ def test_withdraw_returns_unsigned_without_a_signer_and_a_result_with_one():
 
     signed = offramp.withdraw("42", signer=lambda tx: {"hash": "0x" + "cd" * 32})
     assert isinstance(signed, usdctofiat.CashoutResult)
+
+
+def test_the_vendor_withdraws_on_the_escrow_id_alone():
+    """Why ``tools._escrow_deposit_id`` has to exist.
+
+    ``Offramp.withdraw`` is ``withdraw_tx(int(deposit_id))``, so it takes the
+    EscrowV2 id and nothing else -- while the composite ``<escrow>_<EscrowV2
+    id>`` is the only deposit id this plugin's own read tools ever show a
+    caller. Local calldata encoding against no signer: nothing is submitted.
+
+    If a vendor release ever accepts the composite too, this fails, and the
+    normalisation in ``tools`` can go with it.
+    """
+    offramp = tools._create_offramp()
+
+    assert isinstance(offramp.withdraw(4388, signer=None), usdctofiat.UnsignedTx)
+    with pytest.raises(ValueError):
+        offramp.withdraw(f"{usdctofiat.ESCROW_V2}_4388", signer=None)
 
 
 def test_result_types_still_expose_as_dict():

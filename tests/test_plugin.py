@@ -401,7 +401,7 @@ class TestWithdrawSaysWhetherItWasSent:
         # The bare tx must not also be the top-level object: that is the shape
         # that reads as a finished withdrawal.
         assert "to" not in payload
-        offramp.withdraw.assert_called_once_with("42", signer=None)
+        offramp.withdraw.assert_called_once_with(42, signer=None)
 
     def test_an_injected_signer_is_labelled_signed(self, patched):
         """The signed branch, which nothing exercised before."""
@@ -424,6 +424,87 @@ class TestWithdrawSaysWhetherItWasSent:
 
         assert "does not accept a private key" in payload["error"]
         offramp.withdraw.assert_not_called()
+
+    def test_a_string_signer_outranks_an_unusable_deposit_id(self, patched):
+        """A key must be refused on its own terms, not shadowed by a typo.
+
+        Refusing is the only signal the conversation gets that a key was pasted,
+        so a bad ``deposit_id`` in the same call must not answer instead.
+        """
+        _create, _cashout, offramp = patched
+        payload = json.loads(usdctofiat_withdraw({"deposit_id": "not an id"}, signer="0x" + "ab" * 32))
+
+        assert "does not accept a private key" in payload["error"]
+        offramp.withdraw.assert_not_called()
+
+
+class TestWithdrawTakesTheIdTheListToolHandedBack:
+    """The composite id is the only deposit id a caller ever sees.
+
+    ``usdctofiat_deposits`` returns the indexer's ``<escrow>_<EscrowV2 id>`` key
+    and ``usdctofiat_watch`` resolves it, but the vendor withdraws on the
+    EscrowV2 id alone -- ``withdraw_tx(int(deposit_id))``. Pasting the listed id
+    back therefore answered ``invalid literal for int() with base 10``: a raw
+    Python error, naming no id the tool would have taken, on the one tool here
+    that moves a deposit.
+
+    ``ESCROW_V2`` is stubbed to an address that is deliberately not the real
+    one, so a resolution that passes here is reading the client's constant
+    rather than a copy of it.
+    """
+
+    ESCROW = "0x" + "ab" * 20
+    OTHER_ESCROW = "0x" + "cd" * 20
+
+    @pytest.fixture
+    def withdrawable(self, patched):
+        """``patched`` stubs the offramp; the id resolver reads the client too."""
+        _create, _cashout, offramp = patched
+        with patch("tools._import_client", return_value=SimpleNamespace(ESCROW_V2=self.ESCROW)):
+            yield offramp
+
+    def test_the_composite_id_resolves_to_the_escrow_id(self, withdrawable):
+        payload = json.loads(usdctofiat_withdraw({"deposit_id": f"{self.ESCROW}_4388"}))
+
+        assert payload["signed"] is False
+        assert payload["prepared"]["data"] == "0xwithdraw"
+        withdrawable.withdraw.assert_called_once_with(4388, signer=None)
+
+    def test_the_composite_id_resolves_whatever_its_casing(self, withdrawable):
+        """The indexer keys the composite lower case; a caller may checksum it.
+
+        The escrow is matched on its value, not on the spelling it arrived in.
+        """
+        json.loads(usdctofiat_withdraw({"deposit_id": f"{self.ESCROW.upper()}_4388"}))
+
+        withdrawable.withdraw.assert_called_once_with(4388, signer=None)
+
+    def test_the_bare_escrow_id_still_works(self, withdrawable):
+        json.loads(usdctofiat_withdraw({"deposit_id": " 4388 "}))
+
+        withdrawable.withdraw.assert_called_once_with(4388, signer=None)
+
+    def test_another_escrow_is_refused_rather_than_stripped(self, withdrawable):
+        """``withdraw_tx`` always encodes against ``ESCROW_V2``.
+
+        Dropping a foreign prefix would prepare a withdrawal of whichever
+        EscrowV2 deposit happens to share that number -- someone else's.
+        """
+        payload = json.loads(usdctofiat_withdraw({"deposit_id": f"{self.OTHER_ESCROW}_4388"}))
+
+        assert payload["code"] == "VALIDATION"
+        assert self.OTHER_ESCROW in payload["error"]
+        withdrawable.withdraw.assert_not_called()
+
+    def test_an_unusable_id_names_both_accepted_forms(self, withdrawable):
+        payload = json.loads(usdctofiat_withdraw({"deposit_id": "deposit #4388"}))
+
+        assert payload["code"] == "VALIDATION"
+        assert "usdctofiat_deposits" in payload["error"]
+        assert "EscrowV2 id on its own" in payload["error"]
+        # Not the bare int() failure this replaced.
+        assert "invalid literal" not in payload["error"]
+        withdrawable.withdraw.assert_not_called()
 
 
 def test_estimate_mode_required():

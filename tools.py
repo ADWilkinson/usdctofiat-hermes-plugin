@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable
 
 # Matched after _normalise_name, which folds case and drops separators, so one
@@ -36,6 +37,25 @@ _BANNED_KEY_MARKERS = (
     "seedphrase",
     "keystore",
 )
+
+
+# The indexer keys a deposit by ``<escrow address>_<EscrowV2 id>``, and that
+# composite is the only id a caller ever sees: it is what usdctofiat_deposits
+# hands back and what usdctofiat_watch resolves. The vendor withdraws on the
+# EscrowV2 id alone -- ``withdraw_tx(int(deposit_id))`` -- so the listed id
+# pasted straight back is a bare ``invalid literal for int() with base 10``.
+_COMPOSITE_DEPOSIT_ID = re.compile(r"^(0[xX][0-9a-fA-F]{40})_([0-9]+)$")
+_ESCROW_DEPOSIT_ID = re.compile(r"^[0-9]+$")
+
+
+class InvalidDepositId(Exception):
+    """The deposit id is neither id ``usdctofiat_withdraw`` advertises.
+
+    Carries the ``VALIDATION`` code its sibling checks already use, so a
+    mistyped id reads as bad input rather than as a vendor or network failure.
+    """
+
+    code = "VALIDATION"
 
 
 class ClientNotInstalled(Exception):
@@ -118,6 +138,34 @@ def _reject_keys(payload: dict[str, Any]) -> None:
                 "Inject a host signer callback or call cashout without a signer "
                 "to receive unsigned txs."
             )
+
+
+def _escrow_deposit_id(client: Any, deposit_id: Any) -> int:
+    """Resolve either advertised id to the EscrowV2 id the vendor withdraws on.
+
+    A composite for some other escrow is refused rather than stripped:
+    ``withdraw_tx`` always encodes against ``ESCROW_V2``, so dropping a foreign
+    prefix would silently prepare a withdrawal of whichever EscrowV2 deposit
+    happens to share that number.
+    """
+    text = str(deposit_id).strip()
+    if _ESCROW_DEPOSIT_ID.match(text):
+        return int(text)
+    composite = _COMPOSITE_DEPOSIT_ID.match(text)
+    if composite is None:
+        raise InvalidDepositId(
+            f"deposit_id {deposit_id!r} is not a deposit id. Pass the id "
+            "usdctofiat_deposits returned (<escrow>_<EscrowV2 id>), or the "
+            "EscrowV2 id on its own."
+        )
+    escrow, escrow_id = composite.groups()
+    if escrow.lower() != str(client.ESCROW_V2).lower():
+        raise InvalidDepositId(
+            f"deposit {deposit_id} is held by escrow {escrow}, not the EscrowV2 "
+            f"this plugin withdraws from ({client.ESCROW_V2}). Refusing rather "
+            "than withdrawing the deposit that shares its id."
+        )
+    return int(escrow_id)
 
 
 def _as_dict(value: Any) -> Any:
@@ -240,6 +288,9 @@ def usdctofiat_watch(args: dict, **kwargs) -> str:
 def usdctofiat_withdraw(args: dict, **kwargs) -> str:
     """Withdraw / close a deposit. Unsigned unless a host signer is injected.
 
+    Takes either id the read tools speak: the composite ``<escrow>_<EscrowV2
+    id>`` that ``usdctofiat_deposits`` hands back, or the EscrowV2 id alone.
+
     Both branches carry the ``signed`` flag ``usdctofiat_cashout`` already uses.
     Unwrapped, the branch this plugin takes by default answered with a bare
     ``{to, data, value, chainId}``: a transaction nobody has broadcast, with
@@ -252,8 +303,11 @@ def usdctofiat_withdraw(args: dict, **kwargs) -> str:
         deposit_id = args.get("deposit_id")
         if not deposit_id:
             return _dumps({"error": "Need deposit_id", "code": "VALIDATION"})
+        # Before the id is resolved: a key passed as the signer has to be
+        # refused on its own terms, not shadowed by a typo in deposit_id.
         signer = _host_signer(kwargs)
-        result = _create_offramp().withdraw(deposit_id, signer=signer)
+        escrow_id = _escrow_deposit_id(_import_client(), deposit_id)
+        result = _create_offramp().withdraw(escrow_id, signer=signer)
         # The signer this handler passed is what decides the shape coming back:
         # an UnsignedTx without one, a CashoutResult with one. Reading our own
         # argument beats sniffing the result's keys.
