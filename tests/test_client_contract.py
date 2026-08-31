@@ -181,3 +181,36 @@ def test_vendor_errors_reach_the_json_error_path():
     assert issubclass(usdctofiat.UsdctoFiatError, Exception)
     for name in ("ValidationError", "ModeRequired", "SignerRequired"):
         assert issubclass(getattr(usdctofiat, name), usdctofiat.UsdctoFiatError)
+
+
+def test_the_vendor_reads_an_integer_amount_as_base_units():
+    """Why ``tools._require_amount`` has to exist.
+
+    ``parse_usdc_amount`` splits on type, not value, so the same number means two
+    things a million apart and nothing downstream records which was taken. Both
+    branches are local arithmetic -- no network, nothing submitted.
+
+    If a vendor release ever reads an int as human USDC, or refuses one, this
+    fails and the guard in ``tools`` can go with it.
+    """
+    from usdctofiat.calldata import parse_usdc_amount
+
+    # A string is human USDC.
+    assert parse_usdc_amount("500") == 500_000_000
+
+    # The identical number as an int is base units -- 500 millionths of a USDC,
+    # which then trips a floor the caller is a thousand times above.
+    with pytest.raises(usdctofiat.ValidationError, match="minimum 1 USDC"):
+        parse_usdc_amount(500)
+
+    # Above the floor there is no error at all: 2_000_000 USDC becomes 2 USDC.
+    assert parse_usdc_amount(2_000_000) == 2_000_000
+    assert parse_usdc_amount("2000000") == 2_000_000 * 10**6
+
+
+def test_the_amount_shapes_the_guard_lets_through_are_still_human_usdc():
+    """The guard only refuses ints, so every other shape must mean human USDC."""
+    from usdctofiat.calldata import parse_usdc_amount
+
+    assert parse_usdc_amount(500.0) == 500_000_000
+    assert parse_usdc_amount("1.5") == 1_500_000

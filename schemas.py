@@ -30,7 +30,11 @@ CASHOUT = {
             },
             "amount": {
                 "type": "string",
-                "description": "Human USDC amount (string or number). An int is exact six-decimal base units.",
+                "description": (
+                    'Human USDC amount, as a string: "500" is 500 USDC. A bare '
+                    "integer is read as six-decimal base units, not USDC, so it "
+                    "is refused rather than guessed at."
+                ),
             },
             "currency": {
                 "type": "string",
@@ -67,7 +71,7 @@ ESTIMATE = {
             },
             "amount": {
                 "type": "string",
-                "description": "Human USDC amount.",
+                "description": 'Human USDC amount, as a string: "500" is 500 USDC.',
             },
             "currency": {
                 "type": "string",
