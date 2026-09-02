@@ -20,6 +20,16 @@ from tools import (
 )
 
 
+_DELEGATE_HOOK = {
+    "step": "setRateManager",
+    "to": "0x777777779d229cdF3110e9de47943791c26300Ef",
+    "rate_manager": "0xeED7dB23e724aC4590d6BB6f78FDa6dB203535f3",
+    "fee_bps": 10,
+    "requires": "deposit_id",
+    "note": "Best is the same createDeposit as Fast, then EscrowV2.setRateManager ...",
+}
+
+
 def _prepared(mode: str = "fast") -> SimpleNamespace:
     return SimpleNamespace(
         mode=mode,
@@ -35,6 +45,7 @@ def _prepared(mode: str = "fast") -> SimpleNamespace:
             "platform": "revolut",
             "currency": "EUR",
             "attribution": {"referral_code": "TOFIAT", "referrers": ["galleonlabs"]},
+            "delegate_hook": None if mode == "fast" else _DELEGATE_HOOK,
         },
     )
 
@@ -49,7 +60,7 @@ def _result(mode: str = "fast") -> SimpleNamespace:
             "tx_hash": "0x" + "ab" * 32,
             "mode": mode,
             "tx_hashes": ["0x" + "ab" * 32],
-            "delegate_hook": None,
+            "delegate_hook": None if mode == "fast" else _DELEGATE_HOOK,
         },
     )
 
@@ -198,6 +209,99 @@ def test_cashout_with_injected_signer_calls_usdctofiat_cashout(patched):
     assert kwargs["mode"] == "fast"
     assert kwargs["signer"] is signer
     offramp.prepare.assert_not_called()
+
+
+def test_best_says_the_rate_manager_is_not_attached_yet(patched):
+    """A best prepare is a fast deposit until a step this plugin cannot encode.
+
+    ``prepare(mode="best")`` returns the same two txs as fast -- identical
+    approve and createDeposit calldata -- and names a third, ``setRateManager``,
+    that it cannot build until the deposit id exists. Nothing in this plugin's
+    toolset can build it either. Signing the two and reporting the cash-out done
+    therefore leaves a Fast deposit described as a Best one.
+    """
+    _create, _cashout_fn, offramp = patched
+    offramp.prepare.return_value = _prepared("best")
+
+    payload = json.loads(
+        usdctofiat_cashout(
+            {
+                "mode": "best",
+                "amount": "100",
+                "currency": "EUR",
+                "platform": "revolut",
+                "payee": "alice",
+            }
+        )
+    )
+
+    assert payload["signed"] is False
+    assert payload["rate_manager_attached"] is False
+    assert "not in effect yet" in payload["rate_manager_note"]
+    assert "setRateManager" in payload["rate_manager_note"]
+    # The gap the flag is about: three steps named, two txs handed over.
+    assert payload["prepared"]["steps"] == ["approve", "createDeposit", "setRateManager"]
+    assert len(payload["prepared"]["txs"]) == 2
+
+
+def test_best_is_flagged_on_the_signed_branch_too(patched):
+    """A host signer submits those same two txs and stops there.
+
+    An injected signer wins the deposit id the third step needs, and still never
+    sends it, so the reply that reads most like a completed cash-out is exactly
+    the one that must carry the flag.
+    """
+    _create, cashout, offramp = patched
+    cashout.return_value = _result("best")
+
+    payload = json.loads(
+        usdctofiat_cashout(
+            {
+                "mode": "best",
+                "amount": "100",
+                "currency": "EUR",
+                "platform": "revolut",
+                "payee": "alice",
+            },
+            signer=lambda tx: {"hash": "0x" + "cd" * 32, "deposit_id": "42"},
+        )
+    )
+
+    assert payload["signed"] is True
+    assert payload["result"]["mode"] == "best"
+    assert payload["rate_manager_attached"] is False
+    assert payload["result"]["delegate_hook"]["step"] == "setRateManager"
+
+
+def test_fast_carries_no_rate_manager_flag(patched):
+    """Fast has no rate manager to attach, so the flag would read as a fault."""
+    payload = json.loads(
+        usdctofiat_cashout(
+            {
+                "mode": "fast",
+                "amount": "100",
+                "currency": "EUR",
+                "platform": "revolut",
+                "payee": "alice",
+            }
+        )
+    )
+    assert payload["signed"] is False
+    assert "rate_manager_attached" not in payload
+    assert "rate_manager_note" not in payload
+
+
+def test_the_cashout_schema_warns_the_model_about_best():
+    """The reply flag is the guard; the schema is what stops the wrong report.
+
+    A model that has already called the tool reads ``rate_manager_attached``, but
+    the description is what it reads while deciding how to summarise the turn.
+    """
+    import schemas
+
+    blob = json.dumps(schemas.CASHOUT)
+    assert "rate_manager_attached" in blob
+    assert "setRateManager" in blob
 
 
 def test_cashout_mode_required():

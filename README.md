@@ -9,7 +9,7 @@ This is a standalone plugin repo. It is not part of `NousResearch/hermes-agent`.
 `mode` is required on every priced or mutating call. There is no default.
 
 - **fast**: 0% spread / 0 bps. Earns `TOFIAT`.
-- **best**: Delegate rate manager, 10 bps.
+- **best**: Delegate rate manager, 10 bps. Prepared only as far as the deposit — see below.
 
 The plugin never accepts a wallet private key. It wraps [`usdctofiat.cashout`](https://pypi.org/project/usdctofiat/) (`usdctofiat>=0.1.0`). Without a host signer callback it returns unsigned `{to, data, value, chainId}` transactions for you to sign outside Hermes.
 
@@ -57,6 +57,10 @@ Ask Hermes to cash out, or call the tool with:
 `currency` is the one argument the client does not refuse for you. It validates `platform` against its catalog and names the supported rails, but hashes an unrecognised currency straight through — so `euros`, `EURO` or `dollars`, the codes a model writes when the user says "cash out to euros", each produced a real `createDeposit` tx denominated in a currency no taker can fill. The plugin refuses a code the protocol holds no deposits in, before the curator call `prepare` opens with. The set is read off the live indexer and re-derived weekly.
 
 `amount` is the other argument whose wrong reading is silent. The client splits on Python type rather than value — an int is exact six-decimal base units, a string or float is human USDC — and JSON has one number type, so a model writing `500` for "cash out 500 USDC" lands on the wrong side of that split. Below 1,000,000 it comes back as `minimum 1 USDC`, a floor the caller is a thousand times above, so the turn dead-ends on an error naming neither the fault nor the fix; at or above it there is no error at all and `2000000` prepares a 2 USDC deposit. The plugin refuses a bare integer and names the string to retry with, rather than guessing a reading — guessing wrong the other way is a deposit a million times too large.
+
+`mode: best` is the one argument this plugin can validate but cannot finish. `prepare(mode="best")` returns three `steps` and two transactions: the approve and `createDeposit` calldata are byte-identical to `fast`'s, because `encode_create_deposit` takes `mode` and never reads it. Best is the third step, `EscrowV2.setRateManager` on RateManagerV1, and EscrowV2 keys that call on a deposit id that does not exist until `createDeposit` has landed.
+
+No tool here encodes it, and none honestly can: the vendor's `encode_delegate_hook` wants the Delegate `rateManagerId`, and neither the client, the curator's single `/v2/makers/create`, nor the indexer hands one back — while `_bytes32` would keccak an invented one into well-formed calldata, the same silent-wrong-value shape the currency guard exists to refuse. So a `best` reply carries `rate_manager_attached: false` and says it, on both the unsigned and the signed branch. Sign the two transactions and report the cash-out managed, and what you actually created is a Fast deposit.
 
 `usdctofiat_cashout` returns JSON with `prepared` and `signed: false`. Sign `prepared.txs` in the host wallet. `usdctofiat_withdraw` uses the same envelope: `signed: false` means the withdraw tx in `prepared` is unsigned and unbroadcast, so the deposit stays open until you sign it. Never paste a private key into Hermes or this plugin.
 

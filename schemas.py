@@ -18,6 +18,10 @@ CASHOUT = {
         "This tool never accepts a wallet private key. It returns unsigned "
         "{to, data, value, chainId} transactions for a host signer, or a signed "
         "result only when the host has already injected a signer callback. "
+        "A best reply also carries rate_manager_attached: false -- best prepares "
+        "the same deposit as fast and the rate manager is attached by a later "
+        "step this tool does not encode, so do not report a best cash-out as "
+        "managed. "
         "Not a Peer Cash product. Not Peerlytics. Docs: https://usdctofiat.xyz/developers"
     ),
     "parameters": {
@@ -26,7 +30,13 @@ CASHOUT = {
             "mode": {
                 "type": "string",
                 "enum": ["fast", "best"],
-                "description": "Required. fast = 0% / TOFIAT. best = Delegate, 10 bps. No default.",
+                "description": (
+                    "Required. No default. fast = 0% spread, earns TOFIAT. "
+                    "best = Delegate rate manager, 10 bps -- but this tool only "
+                    "prepares the deposit, which is identical to fast; the "
+                    "setRateManager step that makes it best is not encoded here, "
+                    "and the reply says so."
+                ),
             },
             "amount": {
                 "type": "string",
