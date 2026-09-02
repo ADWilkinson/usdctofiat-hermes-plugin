@@ -214,3 +214,63 @@ def test_the_amount_shapes_the_guard_lets_through_are_still_human_usdc():
 
     assert parse_usdc_amount(500.0) == 500_000_000
     assert parse_usdc_amount("1.5") == 1_500_000
+
+
+def test_best_prepares_the_same_deposit_as_fast():
+    """Why ``tools._label_rate_manager`` has to exist.
+
+    ``prepare(mode="best")`` names three steps and hands back two transactions.
+    ``encode_create_deposit`` takes ``mode`` and never reads it, and ``prepare``
+    passes no ``delegate``, so the approve and createDeposit calldata are
+    byte-identical to fast's: everything that makes Best Best is the third step,
+    ``setRateManager``, which EscrowV2 keys on a deposit id that does not exist
+    until createDeposit has landed.
+
+    Local calldata encoding only. ``payee_details_hash`` is supplied so the
+    curator is never called, which keeps this offline like the rest of the suite.
+
+    If a vendor release ever makes best's own deposit differ, this fails, and the
+    flag in ``tools`` can go with it.
+    """
+    offramp = tools._create_offramp()
+    call = dict(
+        amount="500",
+        currency="EUR",
+        platform="revolut",
+        payee="alice",
+        payee_details_hash="0x" + "ab" * 32,
+    )
+
+    fast = offramp.prepare(mode="fast", **call).as_dict()
+    best = offramp.prepare(mode="best", **call).as_dict()
+
+    assert [tx["data"] for tx in best["txs"]] == [tx["data"] for tx in fast["txs"]]
+    assert best["steps"] == ["approve", "createDeposit", "setRateManager"]
+    assert len(best["txs"]) == 2, "a third tx here would make the flag wrong"
+
+
+def test_the_plugin_cannot_encode_the_step_best_is_missing():
+    """The other half of the reason the reply only flags rather than fixes.
+
+    ``encode_delegate_hook`` refuses without a Delegate ``rateManagerId``, and no
+    seam this plugin reaches -- the client, the curator's single
+    ``/v2/makers/create``, or the indexer -- returns one. A sixth tool that let a
+    model supply it would feed an invented value to ``_bytes32``, which keccaks
+    unrecognised text into well-formed calldata: the silent-wrong-value shape
+    ``tools._require_currency`` already exists to refuse.
+    """
+    offramp = tools._create_offramp()
+
+    with pytest.raises(usdctofiat.ValidationError, match="rateManagerId"):
+        offramp.encode_delegate_hook(42, rate_manager_id=None)
+
+    # And nothing on either seam offers to produce one. The day a vendor release
+    # adds a rate-manager lookup here, this fails, and the plugin can grow the
+    # sixth tool instead of the flag.
+    for seam in (offramp.curator, offramp.indexer):
+        offered = [
+            name
+            for name in dir(seam)
+            if not name.startswith("_") and "ratemanager" in name.lower().replace("_", "")
+        ]
+        assert offered == [], f"{type(seam).__name__} now offers {offered}"

@@ -310,6 +310,53 @@ def _require_amount(args: dict[str, Any]) -> Any:
     return amount
 
 
+# ``prepare(mode="best")`` hands back the same two transactions as fast. The
+# approve and createDeposit calldata are byte-identical -- ``encode_create_deposit``
+# takes ``mode`` and never reads it, and ``prepare`` passes no ``delegate`` -- so
+# everything that makes Best Best lives in a third step, ``setRateManager``, that
+# it cannot encode: EscrowV2 keys the call on the deposit id, and the deposit does
+# not exist until createDeposit has landed. ``steps`` therefore names three
+# entries against two txs.
+#
+# This plugin has no tool that closes that gap and cannot honestly grow one. The
+# vendor's ``encode_delegate_hook`` wants the Delegate ``rateManagerId``, and
+# nothing in the client, the curator or the indexer hands one back; letting a
+# model supply it would put an invented value through ``_bytes32``, which keccaks
+# any unrecognised text into a well-formed 32 bytes -- the same silent-wrong-value
+# shape ``_require_currency`` exists to refuse.
+#
+# So the reply says so, beside the ``signed`` flag it already carries. Signing
+# both txs and reporting the cash-out done is otherwise a Fast deposit called a
+# Best one, at a rate the caller chose to pay 10 bps to have managed.
+_RATE_MANAGER_NOT_ATTACHED = (
+    "mode=best is not in effect yet. The transactions in this reply create a "
+    "deposit identical to mode=fast. Best is EscrowV2.setRateManager on "
+    "RateManagerV1 (10 bps), sent against the new deposit id afterwards, and "
+    "this plugin does not encode that step: it needs a Delegate rateManagerId "
+    "no tool here can obtain. Until it is sent this is a Fast deposit. The "
+    "delegate_hook in this reply carries the addresses that step uses; pass "
+    "mode=fast instead if a Fast deposit is what you wanted."
+)
+
+
+def _label_rate_manager(mode: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Flag a best-mode reply that has not attached the rate manager.
+
+    Only on ``best``: fast has no rate manager to attach, and a
+    ``rate_manager_attached: false`` on it would read as a fault rather than as
+    the mode working as documented.
+
+    Both cashout branches get it. An injected host signer submits those same two
+    txs and nothing more, so it wins the deposit id the third step needs and
+    still leaves the rate manager unattached.
+    """
+    if mode != "best":
+        return payload
+    payload["rate_manager_attached"] = False
+    payload["rate_manager_note"] = _RATE_MANAGER_NOT_ATTACHED
+    return payload
+
+
 def _host_signer(kwargs: dict[str, Any]) -> Callable[..., Any] | None:
     """A host may pass a signer callback. Never a key string."""
     signer = kwargs.get("signer")
@@ -348,7 +395,9 @@ def usdctofiat_cashout(args: dict, **kwargs) -> str:
                 platform=platform,
                 payee=payee,
             )
-            return _dumps({"prepared": _as_dict(prepared), "signed": False})
+            return _dumps(
+                _label_rate_manager(mode, {"prepared": _as_dict(prepared), "signed": False})
+            )
         result = _cashout(
             mode=mode,
             amount=amount,
@@ -357,7 +406,7 @@ def usdctofiat_cashout(args: dict, **kwargs) -> str:
             payee=payee,
             signer=signer,
         )
-        return _dumps({"result": _as_dict(result), "signed": True})
+        return _dumps(_label_rate_manager(mode, {"result": _as_dict(result), "signed": True}))
     except Exception as exc:
         return _error(exc)
 
