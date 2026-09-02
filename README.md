@@ -62,6 +62,8 @@ Ask Hermes to cash out, or call the tool with:
 
 No tool here encodes it, and none honestly can: the vendor's `encode_delegate_hook` wants the Delegate `rateManagerId`, and neither the client, the curator's single `/v2/makers/create`, nor the indexer hands one back — while `_bytes32` would keccak an invented one into well-formed calldata, the same silent-wrong-value shape the currency guard exists to refuse. So a `best` reply carries `rate_manager_attached: false` and says it, on both the unsigned and the signed branch. Sign the two transactions and report the cash-out managed, and what you actually created is a Fast deposit.
 
+The estimate keeps the vendor's nominal `manager_fee_bps: 10` for compatibility, but labels it `manager_fee_effective: false` and carries the same limitation in `rate_manager_note`. It is an estimate of the intended Best fee, not evidence that the cash-out this plugin can prepare will attach the manager.
+
 `usdctofiat_cashout` returns JSON with `prepared` and `signed: false`. Sign `prepared.txs` in the host wallet. `usdctofiat_withdraw` uses the same envelope: `signed: false` means the withdraw tx in `prepared` is unsigned and unbroadcast, so the deposit stays open until you sign it. Never paste a private key into Hermes or this plugin.
 
 ## Product lock

@@ -304,6 +304,41 @@ def test_the_cashout_schema_warns_the_model_about_best():
     assert "setRateManager" in blob
 
 
+def test_best_estimate_says_its_manager_fee_is_not_effective(patched):
+    """The nominal 10 bps must not read as a fee this plugin can apply."""
+    _create, _cashout, offramp = patched
+    offramp.estimate.return_value = _estimate("best")
+
+    payload = json.loads(
+        usdctofiat_estimate({"mode": "best", "amount": "100", "currency": "EUR"})
+    )
+
+    assert payload["manager_fee_bps"] == 10
+    assert payload["manager_fee_effective"] is False
+    assert "unmanaged Fast estimate" in payload["rate_manager_note"]
+    assert "rateManagerId" in payload["rate_manager_note"]
+
+
+def test_fast_estimate_keeps_the_vendor_shape(patched):
+    """Fast has no missing manager, so the Best caveat would read as a fault."""
+    payload = json.loads(
+        usdctofiat_estimate({"mode": "fast", "amount": "100", "currency": "EUR"})
+    )
+
+    assert payload["manager_fee_bps"] == 0
+    assert "manager_fee_effective" not in payload
+    assert "rate_manager_note" not in payload
+
+
+def test_the_estimate_schema_warns_the_model_about_the_nominal_best_fee():
+    """The schema is what the model reads before it presents the quote."""
+    import schemas
+
+    blob = json.dumps(schemas.ESTIMATE)
+    assert "manager_fee_effective" in blob
+    assert "unmanaged" in blob
+
+
 def test_cashout_mode_required():
     payload = json.loads(
         usdctofiat_cashout(
