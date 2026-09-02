@@ -338,6 +338,15 @@ _RATE_MANAGER_NOT_ATTACHED = (
     "mode=fast instead if a Fast deposit is what you wanted."
 )
 
+_BEST_ESTIMATE_FEE_NOT_EFFECTIVE = (
+    "manager_fee_bps=10 describes the intended Delegate rate manager, but that "
+    "fee is not effective in a cash-out this plugin can prepare. The plugin's "
+    "mode=best deposit is identical to mode=fast until EscrowV2.setRateManager "
+    "is sent afterwards, and no tool here can encode that step because it "
+    "cannot obtain the required Delegate rateManagerId. Treat this as an "
+    "unmanaged Fast estimate, or pass mode=fast."
+)
+
 
 def _label_rate_manager(mode: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Flag a best-mode reply that has not attached the rate manager.
@@ -354,6 +363,25 @@ def _label_rate_manager(mode: str, payload: dict[str, Any]) -> dict[str, Any]:
         return payload
     payload["rate_manager_attached"] = False
     payload["rate_manager_note"] = _RATE_MANAGER_NOT_ATTACHED
+    return payload
+
+
+def _label_estimate_manager_fee(mode: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Say when the vendor's nominal Best fee cannot become effective.
+
+    ``estimate`` reports ``manager_fee_bps=10`` for Best without inspecting the
+    transaction path. The path this plugin can prepare never attaches that rate
+    manager, so leaving the nominal fee unqualified makes the quote promise a
+    managed cash-out the sibling cash-out handler explicitly says it cannot
+    produce.
+
+    Fast remains the ordinary vendor payload: its zero fee is effective and no
+    missing rate manager is a fault.
+    """
+    if mode != "best":
+        return payload
+    payload["manager_fee_effective"] = False
+    payload["rate_manager_note"] = _BEST_ESTIMATE_FEE_NOT_EFFECTIVE
     return payload
 
 
@@ -422,7 +450,7 @@ def usdctofiat_estimate(args: dict, **kwargs) -> str:
         amount = _require_amount(args)
         currency = _require_currency(args)
         estimate = _create_offramp().estimate(mode=mode, amount=amount, currency=currency)
-        return _dumps(_as_dict(estimate))
+        return _dumps(_label_estimate_manager_fee(mode, _as_dict(estimate)))
     except Exception as exc:
         return _error(exc)
 

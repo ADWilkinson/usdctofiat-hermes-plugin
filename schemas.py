@@ -68,7 +68,10 @@ ESTIMATE = {
     "name": "usdctofiat_estimate",
     "description": (
         "Estimate a USDCtoFiat cash-out. Not a locked quote. "
-        "mode is required: fast (0 bps seller spread) or best (10 bps manager fee). "
+        "mode is required: fast (0 bps seller spread) or best (nominal 10 bps "
+        "manager fee). A best reply carries manager_fee_effective: false because "
+        "this plugin cannot attach the rate manager; treat it as an unmanaged "
+        "Fast estimate. "
         "No API key. No private key."
     ),
     "parameters": {
@@ -77,7 +80,11 @@ ESTIMATE = {
             "mode": {
                 "type": "string",
                 "enum": ["fast", "best"],
-                "description": "Required. fast or best. No default.",
+                "description": (
+                    "Required. fast or best. No default. Best's nominal 10 bps "
+                    "manager fee is not effective in a cash-out this plugin can "
+                    "prepare, and the reply says so."
+                ),
             },
             "amount": {
                 "type": "string",
