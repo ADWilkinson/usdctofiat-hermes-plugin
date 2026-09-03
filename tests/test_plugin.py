@@ -904,3 +904,111 @@ class TestAmountMustNotBeABareInteger:
 
         assert payload["code"] == "VALIDATION"
         cashout.assert_not_called()
+
+
+class TestDepositAmountsAreLabelledBaseUnits:
+    """The indexer stores remainingDeposits in six-decimal USDC, unlabeled.
+
+    A live row of ``3863197`` is 3.863197 USDC. Returned as-is, that number
+    reads as 3.8 million -- the same million-times silent-wrong-value shape
+    ``TestAmountMustNotBeABareInteger`` already guards on the way in. The
+    vendor prepare envelope names the unit (``amount_units``); the two read
+    tools did not. Labelling rather than rewriting: the raw fields stay so a
+    caller who already divided is not broken the other way, and
+    ``remaining_usdc`` is the figure a model can report.
+
+    ``tests/test_client_contract.py`` holds the vendor half of this claim.
+    """
+
+    ROW = {
+        "id": "0x777777779d229cdf3110e9de47943791c26300ef_4408",
+        "remainingDeposits": "3863197",
+        "outstandingIntentAmount": "500000",
+        "status": "ACTIVE",
+    }
+
+    @pytest.fixture
+    def listed(self, patched):
+        _create, _cashout, offramp = patched
+        offramp.deposits.return_value = [dict(self.ROW)]
+        offramp.watch.return_value = iter([dict(self.ROW)])
+        return offramp
+
+    def test_deposits_keeps_the_indexer_fields_and_names_the_usdc(self, listed):
+        payload = json.loads(
+            usdctofiat_deposits({"owner": "0x1111111111111111111111111111111111111111"})
+        )
+        row = payload["deposits"][0]
+
+        assert row["remainingDeposits"] == "3863197"
+        assert row["remaining_usdc"] == "3.863197"
+        assert row["outstandingIntentAmount"] == "500000"
+        assert row["outstanding_intent_usdc"] == "0.5"
+        assert row["amount_unit"] == "usdc_base_units"
+        assert payload["amount_unit"] == "usdc_base_units"
+        assert "3.863197 USDC" in payload["amount_unit_note"]
+        assert "3.8 million" in payload["amount_unit_note"]
+
+    def test_the_unlabeled_millions_it_replaces_are_not_what_ships(self, listed):
+        """The failure mode: a remainingDeposits figure with nothing saying the unit."""
+        payload = json.loads(
+            usdctofiat_deposits({"owner": "0x1111111111111111111111111111111111111111"})
+        )
+        row = payload["deposits"][0]
+
+        assert "remaining_usdc" in row
+        assert row["remaining_usdc"] != row["remainingDeposits"]
+
+    def test_watch_labels_the_same_fields(self, listed):
+        payload = json.loads(usdctofiat_watch({"deposit_id": "4408"}))
+        row = payload["snapshots"][0]
+
+        assert row["remaining_usdc"] == "3.863197"
+        assert row["amount_unit"] == "usdc_base_units"
+        assert payload["amount_unit"] == "usdc_base_units"
+
+    def test_a_whole_usdc_amount_has_no_trailing_zeros(self, listed):
+        listed.deposits.return_value = [
+            {**self.ROW, "remainingDeposits": "100000000", "outstandingIntentAmount": "0"}
+        ]
+
+        row = json.loads(
+            usdctofiat_deposits({"owner": "0x1111111111111111111111111111111111111111"})
+        )["deposits"][0]
+
+        assert row["remaining_usdc"] == "100"
+        assert row["outstanding_intent_usdc"] == "0"
+
+    def test_a_row_without_amount_fields_is_left_alone(self, patched):
+        """The mocked suite's ``{id, status}`` fixture is not an amount."""
+        payload = json.loads(
+            usdctofiat_deposits({"owner": "0x1111111111111111111111111111111111111111"})
+        )
+        row = payload["deposits"][0]
+
+        assert row == {"id": "42", "status": "ACTIVE"}
+        assert "amount_unit" not in payload
+        assert "amount_unit_note" not in payload
+
+    def test_a_non_numeric_amount_does_not_drop_the_row(self, listed):
+        listed.deposits.return_value = [
+            {**self.ROW, "remainingDeposits": "not-units"}
+        ]
+
+        payload = json.loads(
+            usdctofiat_deposits({"owner": "0x1111111111111111111111111111111111111111"})
+        )
+        row = payload["deposits"][0]
+
+        assert row["remainingDeposits"] == "not-units"
+        assert "remaining_usdc" not in row
+        assert payload["deposits"][0]["id"] == self.ROW["id"]
+
+    def test_the_schemas_warn_the_model_about_the_unit(self):
+        """The reply label is the guard; the schema is what is read first."""
+        import schemas
+
+        for schema in (schemas.DEPOSITS, schemas.WATCH):
+            blob = json.dumps(schema)
+            assert "remaining_usdc" in blob
+            assert "base units" in blob
