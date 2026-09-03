@@ -42,7 +42,7 @@ No API key. No `requires_env`. No private-key prompt.
 | `usdctofiat_estimate` | Estimate a cash-out. Not a locked quote. `mode` required. |
 | `usdctofiat_watch` | Watch a deposit by id (public indexer snapshot). Takes the composite `<escrow>_<id>` or a bare EscrowV2 id. `remainingDeposits` is six-decimal USDC base units; `remaining_usdc` is the human amount. |
 | `usdctofiat_withdraw` | Withdraw / close a deposit. Takes the same two ids as `usdctofiat_watch`. Returns `signed: false` with an unsigned tx unless a host signer is injected. |
-| `usdctofiat_deposits` | List deposits for a `0x` owner on Base. Same amount unit as `usdctofiat_watch`. |
+| `usdctofiat_deposits` | List EscrowV2 deposits for a `0x` owner on Base. Other escrows the indexer tracks are omitted. Same amount unit as `usdctofiat_watch`. |
 
 ## Usage
 
@@ -59,6 +59,8 @@ Ask Hermes to cash out, or call the tool with:
 `amount` is the other argument whose wrong reading is silent. The client splits on Python type rather than value — an int is exact six-decimal base units, a string or float is human USDC — and JSON has one number type, so a model writing `500` for "cash out 500 USDC" lands on the wrong side of that split. Below 1,000,000 it comes back as `minimum 1 USDC`, a floor the caller is a thousand times above, so the turn dead-ends on an error naming neither the fault nor the fix; at or above it there is no error at all and `2000000` prepares a 2 USDC deposit. The plugin refuses a bare integer and names the string to retry with, rather than guessing a reading — guessing wrong the other way is a deposit a million times too large.
 
 The same unit is unlabeled on the way out. The indexer stores `remainingDeposits` and `outstandingIntentAmount` as six-decimal USDC, so a live row of `3863197` is 3.863197 USDC. Handed back as-is, that number reads as 3.8 million. `usdctofiat_deposits` and `usdctofiat_watch` keep the indexer fields and add `remaining_usdc`, `outstanding_intent_usdc`, and `amount_unit: usdc_base_units`, so the human amount is the one a caller can report.
+
+The indexer tracks every Base escrow it has ever seen, not just EscrowV2. Filtering `usdctofiat_deposits` on the owner alone therefore listed deposits this plugin cannot withdraw, and the 50-row cap hid EscrowV2 rows behind them. The list is now EscrowV2 on Base only. `usdctofiat_watch` of a composite from another escrow is not found rather than a deposit `usdctofiat_withdraw` would refuse.
 
 `mode: best` is the one argument this plugin can validate but cannot finish. `prepare(mode="best")` returns three `steps` and two transactions: the approve and `createDeposit` calldata are byte-identical to `fast`'s, because `encode_create_deposit` takes `mode` and never reads it. Best is the third step, `EscrowV2.setRateManager` on RateManagerV1, and EscrowV2 keys that call on a deposit id that does not exist until `createDeposit` has landed.
 

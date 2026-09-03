@@ -31,6 +31,20 @@ ROW = {
     "acceptingIntents": True,
 }
 
+FOREIGN_ROW = {
+    **ROW,
+    "id": "0x1111111111111111111111111111111111111111_99",
+}
+
+
+def _scope(**extra):
+    """The EscrowV2 / Base pin every live query has to send."""
+    return {
+        "escrowAddress": usdctofiat.ESCROW_V2.lower(),
+        "chainId": int(usdctofiat.CHAIN_ID),
+        **extra,
+    }
+
 
 class FakeTransport(list):
     """Every query the plugin sent, and the rows Hasura is pretending to hold."""
@@ -67,7 +81,11 @@ def test_deposits_queries_the_root_field_hasura_exposes(calls, indexer):
     query, variables = calls[0]
     assert "Deposit(" in query
     assert "deposits(" not in query
-    assert variables == {"depositor": OWNER}
+    assert "escrowAddress" in query
+    assert "chainId" in query
+    assert "order_by" in query
+    assert "timestamp" in query
+    assert variables == _scope(depositor=OWNER)
 
 
 def test_deposits_matches_the_owner_whatever_case_it_arrived_in(calls, indexer):
@@ -80,7 +98,7 @@ def test_deposits_matches_the_owner_whatever_case_it_arrived_in(calls, indexer):
     assert indexer.deposits(OWNER.lower()) == [ROW]
     query, variables = calls[0]
     assert "_ilike" in query
-    assert variables == {"depositor": OWNER.lower()}
+    assert variables == _scope(depositor=OWNER.lower())
 
 
 @pytest.mark.parametrize(
@@ -102,13 +120,13 @@ def test_deposits_refuses_anything_that_is_not_an_address(calls, indexer, owner)
 def test_deposits_strips_an_address_the_model_padded(calls, indexer):
     assert indexer.deposits(f"  {OWNER}\n") == [ROW]
     _query, variables = calls[0]
-    assert variables == {"depositor": OWNER}
+    assert variables == _scope(depositor=OWNER)
 
 
 def test_watch_resolves_a_composite_id(calls, indexer):
     assert list(indexer.watch(ROW["id"])) == [ROW]
     _query, variables = calls[0]
-    assert variables == {"id": ROW["id"]}
+    assert variables == _scope(id=ROW["id"])
 
 
 def test_watch_resolves_a_bare_escrowv2_id(calls, indexer):
@@ -119,14 +137,35 @@ def test_watch_resolves_a_bare_escrowv2_id(calls, indexer):
     """
     assert list(indexer.watch("4408")) == [ROW]
     _query, variables = calls[0]
-    assert variables == {"id": f"{usdctofiat.ESCROW_V2.lower()}_4408"}
+    assert variables == _scope(id=f"{usdctofiat.ESCROW_V2.lower()}_4408")
 
 
 def test_watch_lower_cases_a_checksummed_composite_id(calls, indexer):
     """The indexer keys deposits in lower case; ``ESCROW_V2`` is checksummed."""
     assert list(indexer.watch(f"{usdctofiat.ESCROW_V2}_4408")) == [ROW]
     _query, variables = calls[0]
-    assert variables == {"id": f"{usdctofiat.ESCROW_V2.lower()}_4408"}
+    assert variables == _scope(id=f"{usdctofiat.ESCROW_V2.lower()}_4408")
+
+
+def test_deposits_drops_a_foreign_escrow_row(calls, indexer):
+    """The indexer tracks every Base escrow, not just EscrowV2.
+
+    An owner-only filter listed deposits this plugin cannot withdraw, and the
+    50-row cap hid EscrowV2 rows behind them. The query pins the escrow; this
+    is the client-side half, for a transport that still answered unscoped.
+    """
+    calls.rows = [FOREIGN_ROW, ROW]
+    assert indexer.deposits(OWNER) == [ROW]
+
+
+def test_watch_of_a_foreign_composite_is_not_found(calls, indexer):
+    """Stripping the prefix would return whichever EscrowV2 deposit shares the id."""
+    calls.rows = [FOREIGN_ROW]
+    assert indexer.deposit(FOREIGN_ROW["id"]) is None
+    with pytest.raises(usdctofiat.errors.IndexerError, match="not found"):
+        list(indexer.watch(FOREIGN_ROW["id"]))
+    _query, variables = calls[0]
+    assert variables == _scope(id=FOREIGN_ROW["id"])
 
 
 def test_a_missing_deposit_is_not_found_rather_than_empty(calls, indexer):
