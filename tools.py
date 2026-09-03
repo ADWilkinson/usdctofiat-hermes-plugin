@@ -310,6 +310,76 @@ def _require_amount(args: dict[str, Any]) -> Any:
     return amount
 
 
+# The indexer stores remainingDeposits / outstandingIntentAmount as uint256
+# six-decimal USDC, the same unit ``parse_usdc_amount`` produces. The two read
+# tools used to hand those fields back unlabeled, so a live row of ``3863197``
+# remainingDeposits reads as 3.8 million USDC rather than 3.863197. The vendor
+# prepare envelope already names the unit (``amount_units``); the indexer
+# fields do not. Labelling rather than rewriting: the raw fields stay, and
+# ``remaining_usdc`` is the human amount a model can report.
+_USDC_BASE_UNITS = 1_000_000
+_DEPOSIT_AMOUNT_NOTE = (
+    "remainingDeposits and outstandingIntentAmount are six-decimal USDC base "
+    "units, not USDC. remaining_usdc and outstanding_intent_usdc are the human "
+    "amounts. 3863197 remainingDeposits is 3.863197 USDC, not 3.8 million."
+)
+
+
+def _human_usdc(raw: Any) -> str:
+    """Turn six-decimal USDC base units into a human USDC string."""
+    units = int(str(raw).strip())
+    sign = ""
+    if units < 0:
+        sign = "-"
+        units = -units
+    whole, frac = divmod(units, _USDC_BASE_UNITS)
+    if frac == 0:
+        return f"{sign}{whole}"
+    return f"{sign}{whole}.{frac:06d}".rstrip("0")
+
+
+def _label_deposit_row(row: Any) -> Any:
+    """Flag indexer amount fields that are base units, and name the USDC figure.
+
+    A row without those fields is left alone -- the mocked suite still uses a
+    bare ``{id, status}`` fixture, and inventing a unit on it would be a lie.
+    A value that is not an integer is also left alone rather than dropping the
+    deposit: a conversion failure must not hide the row the caller asked for.
+    """
+    if not isinstance(row, dict):
+        return row
+    remaining = row.get("remainingDeposits")
+    outstanding = row.get("outstandingIntentAmount")
+    if remaining is None and outstanding is None:
+        return row
+    labelled = dict(row)
+    try:
+        if remaining is not None:
+            labelled["remaining_usdc"] = _human_usdc(remaining)
+        if outstanding is not None:
+            labelled["outstanding_intent_usdc"] = _human_usdc(outstanding)
+    except (TypeError, ValueError):
+        return row
+    labelled["amount_unit"] = "usdc_base_units"
+    return labelled
+
+
+def _label_deposit_payload(payload: dict[str, Any], rows_key: str) -> dict[str, Any]:
+    """Apply the unit label to every deposit row the read tools return."""
+    rows = payload.get(rows_key)
+    if not isinstance(rows, list):
+        return payload
+    labelled_rows = [_label_deposit_row(row) for row in rows]
+    payload[rows_key] = labelled_rows
+    if any(
+        isinstance(row, dict) and row.get("amount_unit") == "usdc_base_units"
+        for row in labelled_rows
+    ):
+        payload["amount_unit"] = "usdc_base_units"
+        payload["amount_unit_note"] = _DEPOSIT_AMOUNT_NOTE
+    return payload
+
+
 # ``prepare(mode="best")`` hands back the same two transactions as fast. The
 # approve and createDeposit calldata are byte-identical -- ``encode_create_deposit``
 # takes ``mode`` and never reads it, and ``prepare`` passes no ``delegate`` -- so
@@ -464,7 +534,11 @@ def usdctofiat_watch(args: dict, **kwargs) -> str:
         if not deposit_id:
             return _dumps({"error": "Need deposit_id", "code": "VALIDATION"})
         rows = list(_create_offramp().watch(deposit_id))
-        return _dumps({"deposit_id": deposit_id, "snapshots": rows})
+        return _dumps(
+            _label_deposit_payload(
+                {"deposit_id": deposit_id, "snapshots": rows}, "snapshots"
+            )
+        )
     except Exception as exc:
         return _error(exc)
 
@@ -510,6 +584,11 @@ def usdctofiat_deposits(args: dict, **kwargs) -> str:
         owner = args.get("owner")
         if not owner:
             return _dumps({"error": "Need owner", "code": "VALIDATION"})
-        return _dumps({"owner": owner, "deposits": _create_offramp().deposits(owner)})
+        return _dumps(
+            _label_deposit_payload(
+                {"owner": owner, "deposits": _create_offramp().deposits(owner)},
+                "deposits",
+            )
+        )
     except Exception as exc:
         return _error(exc)

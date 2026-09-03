@@ -216,6 +216,28 @@ def test_the_amount_shapes_the_guard_lets_through_are_still_human_usdc():
     assert parse_usdc_amount("1.5") == 1_500_000
 
 
+def test_the_indexer_stores_deposit_amounts_in_usdc_base_units():
+    """Why ``tools._label_deposit_row`` has to exist.
+
+    ``remainingDeposits`` is a uint256 of six-decimal USDC -- the same unit
+    ``parse_usdc_amount`` produces. The vendor prepare envelope names it
+    ``amount_units``; the indexer fields do not. 3863197 remainingDeposits is
+    therefore 3.863197 USDC, and a reply that does not say so reads as 3.8
+    million.
+
+    If a vendor release ever changes the decimals, this fails, and the label
+    in ``tools`` has to move with it.
+    """
+    from usdctofiat.calldata import parse_usdc_amount
+    from usdctofiat.constants import USDC_DECIMALS, USDC_UNITS
+
+    assert USDC_DECIMALS == 6
+    assert USDC_UNITS == 1_000_000
+    assert parse_usdc_amount("1") == 1_000_000
+    assert parse_usdc_amount("3.863197") == 3_863_197
+    assert tools._USDC_BASE_UNITS == USDC_UNITS
+
+
 def test_best_prepares_the_same_deposit_as_fast():
     """Why ``tools._label_rate_manager`` has to exist.
 

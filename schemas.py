@@ -102,7 +102,11 @@ ESTIMATE = {
 
 WATCH = {
     "name": "usdctofiat_watch",
-    "description": "Watch a USDCtoFiat deposit by id (public indexer snapshot). No keys.",
+    "description": (
+        "Watch a USDCtoFiat deposit by id (public indexer snapshot). "
+        "remainingDeposits and outstandingIntentAmount are six-decimal USDC "
+        "base units, not USDC; remaining_usdc is the human amount. No keys."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
@@ -143,7 +147,11 @@ WITHDRAW = {
 
 DEPOSITS = {
     "name": "usdctofiat_deposits",
-    "description": "List USDCtoFiat deposits for a 0x owner on Base. Public indexer. No keys.",
+    "description": (
+        "List USDCtoFiat deposits for a 0x owner on Base. Public indexer. "
+        "remainingDeposits and outstandingIntentAmount are six-decimal USDC "
+        "base units, not USDC; remaining_usdc is the human amount. No keys."
+    ),
     "parameters": {
         "type": "object",
         "properties": {

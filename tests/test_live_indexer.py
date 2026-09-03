@@ -146,13 +146,20 @@ def test_the_handlers_go_through_this_indexer(calls, monkeypatch):
 
     ``_create_offramp`` injects the reader on the client's own ``indexer=``
     seam, so a regression that stops injecting it lands back on the vendor's
-    broken queries and this fails.
+    broken queries and this fails. The handlers also label the amount unit
+    the indexer does not name, so the raw row is a subset of the reply.
     """
     payload = json.loads(tools.usdctofiat_deposits({"owner": OWNER}))
-    assert payload["deposits"] == [ROW]
+    row = payload["deposits"][0]
+    assert {key: row[key] for key in ROW} == ROW
+    assert row["remaining_usdc"] == "3.863197"
+    assert row["outstanding_intent_usdc"] == "0"
+    assert payload["amount_unit"] == "usdc_base_units"
 
     watched = json.loads(tools.usdctofiat_watch({"deposit_id": "4408"}))
-    assert watched["snapshots"] == [ROW]
+    snapshot = watched["snapshots"][0]
+    assert {key: snapshot[key] for key in ROW} == ROW
+    assert snapshot["remaining_usdc"] == "3.863197"
 
 
 def test_a_bad_owner_reaches_the_tool_as_a_validation_error(calls):
