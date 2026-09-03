@@ -174,6 +174,7 @@ def test_the_indexer_internals_live_indexer_borrows_still_exist():
     assert issubclass(usdctofiat.errors.IndexerError, usdctofiat.UsdctoFiatError)
     assert usdctofiat.errors.IndexerError("x").code == "INDEXER"
     assert str(usdctofiat.ESCROW_V2).startswith("0x")
+    assert int(usdctofiat.CHAIN_ID) == 8453
 
 
 def test_vendor_errors_reach_the_json_error_path():

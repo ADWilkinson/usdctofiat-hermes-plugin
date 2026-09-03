@@ -24,6 +24,9 @@ unrecognised code into a deposit no taker can fill. A stale copy is the same
 defect facing the other way, so the copy is checked against the indexer here
 rather than trusted.
 
+Listed rows must be EscrowV2. The indexer tracks every Base escrow, so an
+owner-only filter mixed in deposits ``usdctofiat_withdraw`` cannot close.
+
 Weekly and out of the merge path, for the same reason ``hermes-pin.yml`` is:
 this reads a service nobody here operates, and an unrelated outage should not
 turn a required check red.
@@ -42,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tools  # noqa: E402
 
 from usdctofiat.calldata import currency_hash  # noqa: E402
-from usdctofiat.constants import INDEXER_URL  # noqa: E402
+from usdctofiat.constants import ESCROW_V2, INDEXER_URL  # noqa: E402
 
 CURRENCIES_QUERY = """
 query LiveCurrencies {
@@ -53,8 +56,12 @@ query LiveCurrencies {
 """
 
 SEED_QUERY = """
-query NewestDeposit {
-  Deposit(limit: 1, order_by: {blockNumber: desc}) {
+query NewestDeposit($escrowAddress: String!) {
+  Deposit(
+    where: {escrowAddress: {_eq: $escrowAddress}}
+    limit: 1
+    order_by: {blockNumber: desc}
+  ) {
     id
     depositId
     depositor
@@ -73,15 +80,27 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 
 def seed() -> dict[str, str]:
-    """Newest deposit on the indexer, fetched without the code under test."""
-    response = httpx.post(INDEXER_URL, json={"query": SEED_QUERY}, timeout=30)
+    """Newest EscrowV2 deposit on the indexer, fetched without the code under test.
+
+    The indexer holds every Base escrow it has tracked. Seeding from the global
+    newest row would pick a foreign-escrow deposit this plugin cannot watch or
+    withdraw, and the rest of the check would fail for the wrong reason.
+    """
+    response = httpx.post(
+        INDEXER_URL,
+        json={
+            "query": SEED_QUERY,
+            "variables": {"escrowAddress": ESCROW_V2.lower()},
+        },
+        timeout=30,
+    )
     response.raise_for_status()
     body = response.json()
     if body.get("errors"):
         raise SystemExit(f"seed query failed: {json.dumps(body['errors'])[:300]}")
     rows = body["data"]["Deposit"]
     if not rows:
-        raise SystemExit("indexer holds no deposits: cannot seed the check")
+        raise SystemExit("indexer holds no EscrowV2 deposits: cannot seed the check")
     return rows[0]
 
 
@@ -129,6 +148,12 @@ def main() -> int:
 
     listed = json.loads(tools.usdctofiat_deposits({"owner": owner}))
     check("usdctofiat_deposits returns deposits", bool(listed.get("deposits")), listed.get("error", ""))
+    listed_ids = [str(row.get("id") or "") for row in listed.get("deposits") or []]
+    check(
+        "usdctofiat_deposits lists only EscrowV2 deposits",
+        bool(listed_ids) and all(deposit_id.lower().startswith(f"{ESCROW_V2.lower()}_") for deposit_id in listed_ids),
+        "an owner-only filter lists deposits this plugin cannot withdraw",
+    )
 
     lowered = json.loads(tools.usdctofiat_deposits({"owner": owner.lower()}))
     check(

@@ -112,7 +112,10 @@ WATCH = {
         "properties": {
             "deposit_id": {
                 "type": "string",
-                "description": "Fast composite resume key or Best numeric EscrowV2 id.",
+                "description": (
+                    "The id usdctofiat_deposits returned (<escrow>_<EscrowV2 id>), "
+                    "or the EscrowV2 id on its own. Other escrows are not found."
+                ),
             },
         },
         "required": ["deposit_id"],
@@ -148,9 +151,11 @@ WITHDRAW = {
 DEPOSITS = {
     "name": "usdctofiat_deposits",
     "description": (
-        "List USDCtoFiat deposits for a 0x owner on Base. Public indexer. "
-        "remainingDeposits and outstandingIntentAmount are six-decimal USDC "
-        "base units, not USDC; remaining_usdc is the human amount. No keys."
+        "List this plugin's EscrowV2 deposits for a 0x owner on Base. "
+        "Public indexer. Other escrows the indexer tracks are omitted because "
+        "usdctofiat_withdraw cannot close them. remainingDeposits and "
+        "outstandingIntentAmount are six-decimal USDC base units, not USDC; "
+        "remaining_usdc is the human amount. No keys."
     ),
     "parameters": {
         "type": "object",

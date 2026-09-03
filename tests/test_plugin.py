@@ -1012,3 +1012,5 @@ class TestDepositAmountsAreLabelledBaseUnits:
             blob = json.dumps(schema)
             assert "remaining_usdc" in blob
             assert "base units" in blob
+        assert "EscrowV2" in schemas.DEPOSITS["description"]
+        assert "usdctofiat_deposits returned" in schemas.WATCH["parameters"]["properties"]["deposit_id"]["description"]

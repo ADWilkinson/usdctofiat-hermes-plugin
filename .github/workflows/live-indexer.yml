@@ -14,7 +14,8 @@ name: live indexer
 # is not a reason to block a merge. Read-only -- no key, no transaction.
 #
 # It also re-derives tools.SUPPORTED_CURRENCIES, the copy of live state that
-# usdctofiat_cashout refuses unlisted fiat codes against.
+# usdctofiat_cashout refuses unlisted fiat codes against, and fails if the
+# listed deposits are not EscrowV2 -- the indexer tracks every Base escrow.
 
 on:
   schedule:
