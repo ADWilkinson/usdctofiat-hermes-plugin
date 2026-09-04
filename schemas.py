@@ -1,13 +1,14 @@
 """Tool schemas — what the Hermes LLM sees."""
 
 try:
-    from .tools import SUPPORTED_CURRENCIES
+    from .tools import PAYMENT_METHOD_CURRENCIES, SUPPORTED_CURRENCIES
 except ImportError:  # loose directory / unit tests
-    from tools import SUPPORTED_CURRENCIES
+    from tools import PAYMENT_METHOD_CURRENCIES, SUPPORTED_CURRENCIES
 
 # The enum keeps the model from inventing "euros" in the first place; the handler
 # guard that owns this set refuses it anyway, because a schema is advice.
 _CURRENCIES = sorted(SUPPORTED_CURRENCIES)
+_PLATFORMS = sorted(PAYMENT_METHOD_CURRENCIES)
 
 CASHOUT = {
     "name": "usdctofiat_cashout",
@@ -21,7 +22,8 @@ CASHOUT = {
         "A best reply also carries rate_manager_attached: false -- best prepares "
         "the same deposit as fast and the rate manager is attached by a later "
         "step this tool does not encode, so do not report a best cash-out as "
-        "managed. "
+        "managed. A platform/currency pair EscrowV2 does not settle (venmo/EUR, "
+        "monzo/USD) is refused rather than encoded. "
         "Not a Peer Cash product. Not Peerlytics. Docs: https://usdctofiat.xyz/developers"
     ),
     "parameters": {
@@ -53,7 +55,12 @@ CASHOUT = {
             },
             "platform": {
                 "type": "string",
-                "description": "Payment rail, e.g. revolut, venmo, monzo, paypal, wise.",
+                "enum": _PLATFORMS,
+                "description": (
+                    "Payment rail. Must settle the chosen currency onchain: "
+                    "venmo, cashapp, chime and zelle are USD; monzo is GBP. "
+                    "A pair EscrowV2 does not settle is refused rather than encoded."
+                ),
             },
             "payee": {
                 "type": "string",

@@ -217,6 +217,37 @@ def test_the_amount_shapes_the_guard_lets_through_are_still_human_usdc():
     assert parse_usdc_amount("1.5") == 1_500_000
 
 
+def test_the_vendor_encodes_a_pair_escrow_does_not_settle():
+    """Why ``tools._require_pair`` has to exist.
+
+    ``encode_create_deposit`` checks the platform catalog and the currency feed
+    separately, so ``venmo``/``EUR`` encodes as an ordinary createDeposit.
+    EscrowV2 then reverts ``CurrencyNotSupported`` after approve is signed.
+
+    Local calldata only -- ``payee_details_hash`` keeps the curator uncalled.
+    If a vendor release ever refuses the pair, this fails, and the guard in
+    ``tools`` can go with it.
+    """
+    from usdctofiat.calldata import encode_create_deposit
+
+    digest = "0x" + "11" * 32
+    data = encode_create_deposit(
+        amount_units=1_000_000,
+        payee_details_hash=digest,
+        platform="venmo",
+        currency="EUR",
+    )
+    assert data.startswith("0x")
+
+    settled = encode_create_deposit(
+        amount_units=1_000_000,
+        payee_details_hash=digest,
+        platform="venmo",
+        currency="USD",
+    )
+    assert settled.startswith("0x")
+
+
 def test_the_indexer_stores_deposit_amounts_in_usdc_base_units():
     """Why ``tools._label_deposit_row`` has to exist.
 
