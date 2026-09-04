@@ -73,6 +73,45 @@ SUPPORTED_CURRENCIES = frozenset(
     }
 )
 
+# The currencies each payment method's verifier is registered for on
+# PaymentVerifierRegistry (getCurrencies(bytes32) for the nine v1 hashes).
+# EscrowV2 asks that registry and reverts CurrencyNotSupported(paymentMethod,
+# currency) for a pair it does not carry -- after approve is signed and the
+# payee is posted to the curator.
+#
+# usdctofiat 0.1.0 -- the only published release, and the one
+# python_dependencies installs -- checks the platform catalog and the
+# currency feed separately. venmo/EUR, monzo/USD, zelle/MXN therefore each
+# encode a well-formed createDeposit and come back as an ordinary signed:false
+# prepare. Signing it burns the approve gas on a revert.
+#
+# Unknown platforms are left to the vendor: it already refuses those by name.
+# A platform in this map with a currency outside its set is the hole.
+PAYMENT_METHOD_CURRENCIES: dict[str, frozenset[str]] = {
+    "venmo": frozenset({"USD"}),
+    "revolut": frozenset(
+        {
+            "AED", "AUD", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP", "HKD",
+            "HUF", "JPY", "MXN", "NOK", "NZD", "PLN", "RON", "SAR", "SEK", "SGD",
+            "THB", "TRY", "USD", "ZAR",
+        }
+    ),
+    "cashapp": frozenset({"USD"}),
+    "wise": frozenset(
+        {
+            "AED", "AUD", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP", "HKD",
+            "HUF", "IDR", "ILS", "INR", "JPY", "KES", "MXN", "MYR", "NOK", "NZD",
+            "PHP", "PLN", "RON", "SEK", "SGD", "THB", "TRY", "UGX", "USD", "VND",
+            "ZAR",
+        }
+    ),
+    "mercadopago": frozenset({"ARS"}),
+    "zelle": frozenset({"USD"}),
+    "paypal": frozenset({"AUD", "CAD", "EUR", "GBP", "NZD", "SGD", "USD"}),
+    "monzo": frozenset({"GBP"}),
+    "chime": frozenset({"USD"}),
+}
+
 
 class InvalidDepositId(Exception):
     """The deposit id is neither id ``usdctofiat_withdraw`` advertises.
@@ -90,6 +129,16 @@ class UnsupportedCurrency(Exception):
     Carries ``VALIDATION`` for the same reason ``InvalidDepositId`` does: this is
     bad input, not a vendor or network failure, and the model has to be able to
     tell the difference to know that retrying will not help.
+    """
+
+    code = "VALIDATION"
+
+
+class UnsupportedPair(Exception):
+    """The platform does not settle that currency onchain.
+
+    Carries ``VALIDATION`` like ``UnsupportedCurrency``: this is bad input, not a
+    vendor or network failure, and retrying the same pair will not help.
     """
 
     code = "VALIDATION"
@@ -275,6 +324,27 @@ def _require_currency(args: dict[str, Any]) -> str:
             f"Supported: {', '.join(sorted(SUPPORTED_CURRENCIES))}."
         )
     return code
+
+
+def _require_pair(platform: Any, currency: str) -> str:
+    """Refuse a platform/currency pair EscrowV2 will revert, and name what it takes.
+
+    Runs before the client is touched, so an unregistered pair costs neither the
+    curator round-trip ``prepare`` opens with nor a signed approve against a
+    createDeposit that reverts CurrencyNotSupported.
+
+    Unknown platforms pass through: the vendor already refuses those by name.
+    The hole is a known platform with a currency its verifier does not carry.
+    """
+    plat = str(platform or "").strip().lower()
+    onchain = PAYMENT_METHOD_CURRENCIES.get(plat)
+    if onchain is None or currency in onchain:
+        return plat
+    raise UnsupportedPair(
+        f"platform {platform!r} does not settle {currency}: EscrowV2 reverts "
+        "CurrencyNotSupported for that pair, after the approve is signed. "
+        f"{plat} takes {', '.join(sorted(onchain))}."
+    )
 
 
 def _require_amount(args: dict[str, Any]) -> Any:
@@ -484,6 +554,7 @@ def usdctofiat_cashout(args: dict, **kwargs) -> str:
             return _dumps({"error": "Need amount, currency, platform, and payee", "code": "VALIDATION"})
         amount = _require_amount(args)
         currency = _require_currency(args)
+        platform = _require_pair(platform, currency)
         signer = _host_signer(kwargs)
         if signer is None:
             prepared = _create_offramp().prepare(

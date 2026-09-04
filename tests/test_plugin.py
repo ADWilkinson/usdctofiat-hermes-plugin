@@ -820,6 +820,141 @@ class TestCurrencyMustBeOneTheProtocolHolds:
             assert offered == sorted(SUPPORTED_CURRENCIES)
 
 
+class TestPairMustBeOneEscrowSettles:
+    """The vendor refuses a platform by name; a known platform plus the wrong
+    currency encoded cleanly.
+
+    ``usdctofiat`` 0.1.0 checks the platform catalog and the currency feed
+    separately. ``venmo``/``EUR``, ``monzo``/``USD`` and ``zelle``/``MXN``
+    therefore each produced a well-formed createDeposit, returned as an ordinary
+    ``signed: false`` prepare. EscrowV2 then reverts
+    ``CurrencyNotSupported(paymentMethod, currency)`` after the approve is
+    signed. The refusal has to land before the client is reached: ``prepare``
+    opens with a live curator POST.
+
+    ``tests/test_client_contract.py`` holds the vendor half of this claim.
+    """
+
+    ARGS = {"mode": "fast", "amount": "100", "payee": "alice"}
+
+    @pytest.mark.parametrize(
+        "platform,currency",
+        [
+            ("venmo", "USD"),
+            ("revolut", "EUR"),
+            ("monzo", "GBP"),
+            ("paypal", "SGD"),
+            ("cashapp", "USD"),
+            ("zelle", "USD"),
+            ("chime", "USD"),
+            ("wise", "USD"),
+        ],
+    )
+    def test_a_pair_escrow_settles_is_accepted(self, platform, currency, patched):
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": platform, "currency": currency})
+        )
+
+        assert payload["signed"] is False
+        assert offramp.prepare.call_args.kwargs["platform"] == platform
+        assert offramp.prepare.call_args.kwargs["currency"] == currency
+
+    @pytest.mark.parametrize(
+        "platform,currency",
+        [
+            ("venmo", "EUR"),
+            ("cashapp", "GBP"),
+            ("revolut", "PHP"),
+            ("wise", "SAR"),
+            ("monzo", "EUR"),
+            ("paypal", "TRY"),
+            ("zelle", "MXN"),
+            ("chime", "CAD"),
+        ],
+    )
+    def test_a_pair_escrow_does_not_settle_is_refused_before_the_vendor(
+        self, platform, currency, patched
+    ):
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": platform, "currency": currency})
+        )
+
+        assert payload["code"] == "VALIDATION"
+        assert currency in payload["error"]
+        assert platform in payload["error"]
+        offramp.prepare.assert_not_called()
+
+    def test_the_signable_prepare_it_replaces_is_not_what_ships(self, patched):
+        """The failure mode: a signable tx for a deposit EscrowV2 will revert."""
+        _create, _cashout, _offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": "venmo", "currency": "EUR"})
+        )
+
+        assert "prepared" not in payload
+        assert payload.get("signed") is not False
+
+    def test_the_refusal_names_the_currencies_that_platform_takes(self, patched):
+        _create, _cashout, _offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": "venmo", "currency": "EUR"})
+        )
+
+        assert "USD" in payload["error"]
+
+    @pytest.mark.parametrize("platform", ["Venmo", " VENMO ", "venmo"])
+    def test_platform_casing_and_padding_are_normalised(self, platform, patched):
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": platform, "currency": "USD"})
+        )
+
+        assert payload["signed"] is False
+        assert offramp.prepare.call_args.kwargs["platform"] == "venmo"
+
+    def test_an_unknown_platform_is_left_to_the_vendor(self, patched):
+        """The vendor already names the catalog. Duplicating that set here would
+        be another copy to drift; the hole is a known platform with the wrong
+        currency."""
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": "skrill", "currency": "USD"})
+        )
+
+        assert payload["signed"] is False
+        offramp.prepare.assert_called_once()
+
+    def test_the_signed_branch_is_guarded_as_well(self, patched):
+        _create, cashout, _offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout(
+                {**self.ARGS, "platform": "venmo", "currency": "EUR"},
+                signer=lambda tx: tx,
+            )
+        )
+
+        assert payload["code"] == "VALIDATION"
+        cashout.assert_not_called()
+
+    def test_the_schema_offers_only_platforms_the_pair_map_knows(self):
+        """A model that obeys the enum still has to pick a currency that rail
+        settles; the handler refuses the combination the schema cannot express."""
+        import schemas
+        from tools import PAYMENT_METHOD_CURRENCIES
+
+        offered = schemas.CASHOUT["parameters"]["properties"]["platform"]["enum"]
+        assert offered == sorted(PAYMENT_METHOD_CURRENCIES)
+
+
 class TestAmountMustNotBeABareInteger:
     """``currency`` was hashed through; ``amount`` is read as the wrong unit.
 
