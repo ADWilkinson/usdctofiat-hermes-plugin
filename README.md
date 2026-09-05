@@ -90,6 +90,7 @@ Native Hermes directory plugin (`plugin.yaml` + `register(ctx)`):
 ├── schemas.py       # what the LLM sees
 ├── tools.py         # wraps usdctofiat.cashout
 ├── live_indexer.py  # reads the deposit indexer the client points at
+├── CHANGELOG.md     # caller-visible version identity; must match plugin.yaml
 ├── tests/           # mocked tool tests + installer/vendor/host contract guards
 └── scripts/         # regenerate the pinned snapshot; run the install scan and the indexer check
 ```
@@ -101,13 +102,14 @@ pip install "usdctofiat>=0.1.0" pytest
 pytest
 ```
 
-Tool behaviour is tested against a mocked client. Five guards check the real contracts instead:
+Tool behaviour is tested against a mocked client. Six guards check the real contracts instead:
 
 - the installed `usdctofiat` call surface, including the `indexer=` seam `live_indexer.py` injects on;
 - the Hermes installer's manifest ceiling;
 - the security scan the installer runs on the clone before it installs, where a `caution` verdict refuses the documented one-line install rather than merely warning;
 - the Hermes host runtime (`register(ctx)`, the handler dispatch shape, and `provides_tools`);
-- the deposit reads, against the shape the live indexer answers with.
+- the deposit reads, against the shape the live indexer answers with;
+- the declared product version: `plugin.yaml`, `pyproject.toml`, and the newest `CHANGELOG.md` entry must agree. A change to what `tools.py` or `schemas.py` does to a call moves that number. `manifest_version` is the installer's ceiling, not this.
 
 The Hermes shapes are captured from a pinned revision into `tests/hermes_pinned.py`, so the whole suite runs offline; `scripts/refresh_hermes_pin.py` regenerates that file when the pin moves, and a weekly workflow re-derives it to prove it is still faithful. The scan guard re-implements only the scanner's structural half offline, so the same weekly workflow runs `scripts/hermes_install_scan.py`, which executes the real scanner from the pinned revision over the tracked tree.
 
