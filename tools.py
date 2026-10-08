@@ -64,17 +64,24 @@ _ESCROW_DEPOSIT_ID = re.compile(r"^[0-9]+$")
 # protocol adds later costs a caller a named error they can act on, while a
 # currency it never had costs them a locked deposit. scripts/live_indexer_check.py
 # re-derives this set weekly and fails when it drifts.
+# Operator verified 2026-10-08 via usdctofiat.calldata.currency_hash:
+# keccak256("UAH") =
+# 0x763ce5da7605b2b5ec3e9ec5b0ab2bbcf8b27d28da2b5002e4e364278d729d14.
 SUPPORTED_CURRENCIES = frozenset(
     {
         "AED", "ARS", "AUD", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP",
         "HKD", "HUF", "IDR", "ILS", "INR", "JPY", "KES", "MXN", "MYR", "NOK",
-        "NZD", "PHP", "PLN", "RON", "SAR", "SEK", "SGD", "THB", "TRY", "UGX",
-        "USD", "VND", "ZAR",
+        "NZD", "PHP", "PLN", "RON", "SAR", "SEK", "SGD", "THB", "TRY", "UAH",
+        "UGX", "USD", "VND", "ZAR",
     }
 )
 
 # The currencies each payment method's verifier is registered for on
 # PaymentVerifierRegistry (getCurrencies(bytes32) for the nine v1 hashes).
+# monobank (operator registry-verified [UAH] on 2026-10-08, hash 0x1d966dbd…ce18,
+# EscrowV2 registry 0x2b82D24437ff66Fb173eabDfD67ee2ACeb8bEb1e) is deliberately
+# absent until the vendor client supports it, because the schema enum is derived
+# from this map.
 # EscrowV2 asks that registry and reverts CurrencyNotSupported(paymentMethod,
 # currency) for a pair it does not carry -- after approve is signed and the
 # payee is posted to the curator.
