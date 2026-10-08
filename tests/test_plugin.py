@@ -775,6 +775,17 @@ class TestCurrencyMustBeOneTheProtocolHolds:
         # Never reached the vendor, so never reached the curator POST prepare opens with.
         offramp.prepare.assert_not_called()
 
+    def test_uah_passes_the_currency_gate(self, patched):
+        # The patched client proves only the gate; the vendor refuses monobank.
+        _create, _cashout, offramp = patched
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": "monobank", "currency": "UAH"})
+        )
+
+        assert payload["signed"] is False
+        assert offramp.prepare.call_args.kwargs["currency"] == "UAH"
+
     def test_the_unsigned_prepare_it_replaces_is_not_what_ships(self, patched):
         """The failure mode: a signable tx handed back for a meaningless currency."""
         _create, _cashout, _offramp = patched
@@ -886,6 +897,25 @@ class TestPairMustBeOneEscrowSettles:
         assert payload["code"] == "VALIDATION"
         assert currency in payload["error"]
         assert platform in payload["error"]
+        offramp.prepare.assert_not_called()
+
+    @pytest.mark.parametrize("platform", ["revolut", "wise"])
+    def test_uah_is_refused_as_an_unsupported_pair(self, platform, patched):
+        from tools import PAYMENT_METHOD_CURRENCIES, UnsupportedPair, _require_pair
+
+        _create, _cashout, offramp = patched
+        takes = f"{platform} takes {', '.join(sorted(PAYMENT_METHOD_CURRENCIES[platform]))}."
+
+        with pytest.raises(UnsupportedPair) as caught:
+            _require_pair(platform, "UAH")
+        assert takes in str(caught.value)
+
+        payload = json.loads(
+            usdctofiat_cashout({**self.ARGS, "platform": platform, "currency": "UAH"})
+        )
+
+        assert payload["code"] == "VALIDATION"
+        assert payload["error"] == str(caught.value)
         offramp.prepare.assert_not_called()
 
     def test_the_signable_prepare_it_replaces_is_not_what_ships(self, patched):

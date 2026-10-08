@@ -8,6 +8,17 @@ not a product version.
 Hermes prints this string from `plugin.yaml` in `plugins list` and
 `plugins info`. It does not surface the installed git revision.
 
+## 2.1.0 — 2026-10-08
+
+- UAH passes the currency gate. Operator verified on 2026-10-08 with
+  `usdctofiat.calldata.currency_hash`: `keccak256("UAH")` =
+  `0x763ce5da7605b2b5ec3e9ec5b0ab2bbcf8b27d28da2b5002e4e364278d729d14`.
+- Monobank is verified on-chain for exactly UAH (operator, 2026-10-08), but
+  is not offered: usdctofiat 0.1.0 refuses it by name, and the schema's platform
+  enum comes from the pair map.
+- Revolut/UAH and wise/UAH remain refused as unsupported pairs, naming the
+  currencies each takes.
+
 ## 2.0.0 — 2026-09-05
 
 These landed while still declared `1.0.0`. This number is the first one that
